@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>RS OS Control Plane</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f6f8; padding:24px; color:#111827; }
+    button { background:#111827; color:white; border:0; padding:10px 14px; border-radius:8px; cursor:pointer; margin:4px; }
+    input, select { padding:10px; border:1px solid #d1d5db; border-radius:8px; margin:4px; min-width:240px; }
+    .card { background:white; padding:16px; border-radius:12px; margin:14px 0; box-shadow:0 2px 8px rgba(0,0,0,.08); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+    pre { background:#111827; color:#d1d5db; padding:14px; border-radius:8px; overflow:auto; }
+    .ok { color:green; font-weight:bold; }
+    .bad { color:#b91c1c; font-weight:bold; }
+  </style>
+</head>
+<body>
+
+<h1>RS OS Control Plane</h1>
+<p>Secure Runtime Console</p>
+
+<div class="card">
+  <h2>Operator Login</h2>
+  <input id="username" value="janette" placeholder="Username">
+  <input id="password" type="password" value="rsos2026" placeholder="Password">
+  <button onclick="login()">Login</button>
+  <button onclick="logout()">Logout</button>
+  <p id="authState" class="bad">Nicht angemeldet</p>
+</div>
+
+<div class="card">
+  <button onclick="loadDashboard()">Dashboard laden</button>
+  <button onclick="loadObjects()">Objekte laden</button>
+  <button onclick="loadEvents()">Events laden</button>
+</div>
+
+<div class="card">
+  <h2>Objekt Control View</h2>
+  <input id="objectId" value="obj-risk-0001">
+  <button onclick="loadControl()">Control</button>
+  <button onclick="loadReplay()">Replay</button>
+  <button onclick="loadRecovery()">Recovery</button>
+</div>
+
+<div class="card">
+  <h2>Action Panel</h2>
+
+  <h3>1. Runtime Object anlegen</h3>
+  <input id="newObjectId" value="obj-live-0001">
+  <input id="runtimeType" value="runtime.object.repair_order">
+  <select id="state">
+    <option>created</option>
+    <option>diagnosis</option>
+    <option>customer_approval</option>
+    <option>repair</option>
+    <option>qm_review</option>
+    <option>invoice</option>
+  </select>
+  <input id="priority" value="normal">
+  <input id="riskScore" type="number" value="25">
+  <button onclick="createObject()">Object erstellen</button>
+
+  <h3>2. Transition ausführen</h3>
+  <input id="transitionObjectId" value="obj-live-0001">
+  <select id="toState">
+    <option>diagnosis</option>
+    <option>customer_approval</option>
+    <option>repair</option>
+    <option>qm_review</option>
+    <option>invoice</option>
+    <option>completed</option>
+  </select>
+  <button onclick="transitionObject()">Transition</button>
+
+  <h3>3. Governance Approval</h3>
+  <input id="approvalObjectId" value="obj-risk-0001">
+  <input id="approvalReason" value="approved via frontend JWT">
+<button id="approveBtn" onclick="approveObject()">Approve</button>
+  <h3>4. QM Review</h3>
+  <input id="qmObjectId" value="obj-risk-0001">
+  <input id="reviewer" value="janette">
+  <select id="qmStatus">
+    <option>passed</option>
+    <option>failed</option>
+  </select>
+  <input id="qmNotes" value="Repair checked and documented">
+<button id="qmBtn" onclick="qmReview()">QM Review</button>
+  <h3>5. Invoice</h3>
+  <input id="invoiceObjectId" value="obj-risk-0001">
+  <input id="invoiceNumber" value="RE-2026-0003">
+  <input id="amount" type="number" value="849.90">
+  <input id="currency" value="EUR">
+  <input id="issuedBy" value="janette">
+  <input id="invoiceNotes" value="Repair completed after QM review">
+<button id="invoiceBtn" onclick="createInvoice()">Invoice</button>
+  <h3>6. Complete</h3>
+  <input id="completeObjectId" value="obj-risk-0001">
+  <input id="completedBy" value="janette">
+  <input id="closingNotes" value="Runtime successfully completed">
+
+<button id="completeBtn" onclick="completeObject()">Complete</button>
+</div>
+
+<div id="summary" class="grid"></div>
+
+<h2>Ausgabe</h2>
+<pre id="output">Bereit.</pre>
+
+<script>
+const API = "https://api.rudolph-buchhaltung.de";
+
+function getToken() {
+  return localStorage.getItem("rsos_token");
+}
+
+
+function getOperator() {
+  const raw = localStorage.getItem("rsos_operator");
+  return raw ? JSON.parse(raw) : null;
+}
+
+function setAuthState() {
+  const token = getToken();
+  const operator = getOperator();
+  const authState = document.getElementById("authState");
+
+  if (token && operator) {
+    authState.textContent = "Angemeldet - " + operator.operator_id + " / " + operator.role;
+    authState.className = "ok";
+  } else {
+    authState.textContent = "Nicht angemeldet";
+    authState.className = "bad";
+  }
+
+  applyRolePermissions();
+}
+
+
+
+function show(data) {
+  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+}
+
+async function login() {
+  const res = await fetch(API + "/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username: document.getElementById("username").value,
+      password: document.getElementById("password").value
+    })
+  });
+
+  const data = await res.json();
+  show(data);
+
+  if (data.token) {
+    localStorage.setItem("rsos_token", data.token);
+    localStorage.setItem("rsos_operator", JSON.stringify(data.operator));
+  }
+
+  setAuthState();
+}
+
+function logout() {
+  localStorage.removeItem("rsos_token");
+  localStorage.removeItem("rsos_operator");
+  setAuthState();
+  show({ logged_out: true });
+}
+
+async function get(path) {
+  const res = await fetch(API + path);
+  const data = await res.json();
+  show(data);
+  return data;
+}
+
+async function post(path, body) {
+  const headers = { "Content-Type": "application/json" };
+  const token = getToken();
+
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+
+  const res = await fetch(API + path, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+
+  const data = await res.json();
+  show(data);
+  loadDashboard();
+  return data;
+}
+
+async function loadDashboard() {
+  const data = await get("/runtime/dashboard");
+  const d = data.dashboard;
+
+  document.getElementById("summary").innerHTML = `
+    <div class="card"><h3>Objekte</h3><p>${d.summary.total_objects}</p></div>
+    <div class="card"><h3>Aktiv</h3><p>${d.summary.active_objects}</p></div>
+    <div class="card"><h3>Hochrisiko</h3><p>${d.summary.high_risk_objects}</p></div>
+    <div class="card"><h3>Events</h3><p>${d.summary.total_events}</p></div>
+  `;
+}
+
+function loadObjects(){ return get("/runtime/objects"); }
+function loadEvents(){ return get("/runtime/events"); }
+function loadControl(){ return get("/runtime/control/" + document.getElementById("objectId").value); }
+function loadReplay(){ return get("/runtime/replay/" + document.getElementById("objectId").value); }
+function loadRecovery(){ return get("/runtime/recovery/" + document.getElementById("objectId").value); }
+
+function createObject(){
+  return post("/runtime/objects", {
+    object_id: document.getElementById("newObjectId").value,
+    runtime_type: document.getElementById("runtimeType").value,
+    state: document.getElementById("state").value,
+    priority: document.getElementById("priority").value,
+    risk_score: Number(document.getElementById("riskScore").value)
+  });
+}
+
+function transitionObject(){
+  return post("/runtime/transition", {
+    object_id: document.getElementById("transitionObjectId").value,
+    to_state: document.getElementById("toState").value
+  });
+}
+
+function approveObject(){
+  return post("/governance/approve", {
+    object_id: document.getElementById("approvalObjectId").value,
+    reason: document.getElementById("approvalReason").value
+  });
+}
+
+function qmReview(){
+  return post("/runtime/qm-review", {
+    object_id: document.getElementById("qmObjectId").value,
+    reviewer: document.getElementById("reviewer").value,
+    result_status: document.getElementById("qmStatus").value,
+    notes: document.getElementById("qmNotes").value
+  });
+}
+
+function createInvoice(){
+  return post("/runtime/invoice", {
+    object_id: document.getElementById("invoiceObjectId").value,
+    invoice_number: document.getElementById("invoiceNumber").value,
+    amount: Number(document.getElementById("amount").value),
+    currency: document.getElementById("currency").value,
+    issued_by: document.getElementById("issuedBy").value,
+    notes: document.getElementById("invoiceNotes").value
+  });
+}
+
+function completeObject(){
+  return post("/runtime/complete", {
+    object_id: document.getElementById("completeObjectId").value,
+    completed_by: document.getElementById("completedBy").value,
+    closing_notes: document.getElementById("closingNotes").value
+  });
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  setAuthState();
+  loadDashboard();
+});
+
+function applyRolePermissions() {
+  const operator = getOperator();
+  const role = operator ? operator.role : null;
+
+  const permissions = {
+    createObject: ["runtime_admin", "operator"],
+    transitionObject: ["runtime_admin", "operator"],
+    approveObject: ["runtime_admin"],
+    qmReview: ["runtime_admin", "qm"],
+    createInvoice: ["runtime_admin", "finance"],
+    completeObject: ["runtime_admin"]
+  };
+
+  document.querySelectorAll("button").forEach(button => {
+    const action = button.getAttribute("onclick");
+    if (!action) return;
+
+    for (const fn in permissions) {
+      if (action.includes(fn)) {
+        const allowed = role && permissions[fn].includes(role);
+        button.disabled = !allowed;
+        button.style.opacity = allowed ? "1" : "0.35";
+        button.style.cursor = allowed ? "pointer" : "not-allowed";
+      }
+    }
+  });
+}
+window.addEventListener("DOMContentLoaded", () => {
+  setAuthState();
+  loadDashboard();
+  applyRolePermissions();
+});
+</script>
+
+</body>
+</html>

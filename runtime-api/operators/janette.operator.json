@@ -1,0 +1,12 @@
+{
+  "operator_id": "janette",
+  "role": "runtime_admin",
+  "issued_by": "rsos-owner-root",
+  "valid_until": "2026-12-31",
+  "permissions": [
+    "runtime:*",
+    "governance:*",
+    "audit:*",
+    "operators:*"
+  ]
+}
