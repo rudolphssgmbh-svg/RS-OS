@@ -657,7 +657,8 @@ if (req.method === "POST" && path === "/runtime/execute") {
         evaluated_object: object.object_id
       });
     }
-    // RUNTIME WORKER V2
+
+    // RUNTIME WORKER V3
 
     if (req.method === "POST" && path === "/runtime/worker/run") {
 
@@ -670,6 +671,8 @@ if (req.method === "POST" && path === "/runtime/execute") {
       }
 
       const tenant_id = auth.user.tenant_id;
+
+      await db.query("BEGIN");
 
       const nextJobResult = await db.query(`
         SELECT *
@@ -684,9 +687,13 @@ if (req.method === "POST" && path === "/runtime/execute") {
           )
         ORDER BY created_at ASC
         LIMIT 1
+        FOR UPDATE SKIP LOCKED
       `, [tenant_id]);
 
       if (nextJobResult.rows.length === 0) {
+
+        await db.query("COMMIT");
+
         return send(res, 200, {
           worker: "idle",
           pending_jobs: 0
@@ -704,24 +711,30 @@ if (req.method === "POST" && path === "/runtime/execute") {
         WHERE job_id = $1
       `, [job.job_id]);
 
+      await db.query("COMMIT");
+
       try {
-        if (job.execution_type === "diagnostic.fail") {
-          throw new Error("Simulated diagnostic failure");
+
+        if (
+          job.execution_type === "diagnostic.fail"
+        ) {
+          throw new Error(
+            "Simulated diagnostic failure"
+          );
         }
 
         await db.query(`
           UPDATE runtime_execution_jobs
           SET
             status = 'completed',
-            completed_at = NOW(),
-            last_error = NULL
+            completed_at = NOW()
           WHERE job_id = $1
         `, [job.job_id]);
 
         await writeEvent({
           event_type: "runtime.execution.completed",
           object_id: job.object_id,
-          message: `Execution completed: ${job.execution_type}`,
+          message: "Execution completed by runtime worker",
           tenant_id
         });
 
@@ -734,16 +747,21 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       } catch (workerErr) {
 
-        const retryCount = Number(job.retry_count || 0) + 1;
-        const finalStatus = retryCount >= 3 ? "failed_permanent" : "failed";
+        const retryCount =
+          (job.retry_count || 0) + 1;
+
+        const finalStatus =
+          retryCount >= 3
+            ? "failed_permanent"
+            : "failed";
 
         await db.query(`
           UPDATE runtime_execution_jobs
           SET
             status = $2,
             retry_count = $3,
-            last_error = $4,
-            failed_at = NOW()
+            failed_at = NOW(),
+            last_error = $4
           WHERE job_id = $1
         `, [
           job.job_id,
@@ -753,9 +771,11 @@ if (req.method === "POST" && path === "/runtime/execute") {
         ]);
 
         await writeEvent({
-          event_type: "runtime.execution.failed",
+          event_type:
+            "runtime.execution.failed",
           object_id: job.object_id,
-          message: `Execution failed: ${workerErr.message}`,
+          message:
+            `Execution failed: ${workerErr.message}`,
           tenant_id
         });
 
