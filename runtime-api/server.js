@@ -657,7 +657,129 @@ if (req.method === "POST" && path === "/runtime/execute") {
         evaluated_object: object.object_id
       });
     }
+    // RUNTIME WORKER
 
+    if (req.method === "POST" && path === "/runtime/worker/run") {
+
+      const auth = requireRole(req, [
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const nextJobResult = await db.query(`
+        SELECT *
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND status = 'pending'
+        ORDER BY created_at ASC
+        LIMIT 1
+      `, [tenant_id]);
+
+      if (nextJobResult.rows.length === 0) {
+
+        return send(res, 200, {
+          worker: "idle",
+          pending_jobs: 0
+        });
+      }
+
+      const job = nextJobResult.rows[0];
+
+      await db.query(`
+        UPDATE runtime_execution_jobs
+        SET status = 'running'
+        WHERE job_id = $1
+      `, [job.job_id]);
+
+      await db.query(`
+        UPDATE runtime_execution_jobs
+        SET
+          status = 'completed',
+          completed_at = NOW()
+        WHERE job_id = $1
+      `, [job.job_id]);
+
+      await writeEvent({
+        event_type: "runtime.execution.completed",
+        object_id: job.object_id,
+        message: "Execution completed by runtime worker",
+        tenant_id
+      });
+
+      return send(res, 200, {
+        worker: "completed",
+        job_id: job.job_id,
+        object_id: job.object_id,
+        execution_type: job.execution_type
+      });
+    }
+
+    // RUNTIME WORKER
+
+    if (req.method === "POST" && path === "/runtime/worker/run") {
+
+      const auth = requireRole(req, [
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const nextJobResult = await db.query(`
+        SELECT *
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND status = 'pending'
+        ORDER BY created_at ASC
+        LIMIT 1
+      `, [tenant_id]);
+
+      if (nextJobResult.rows.length === 0) {
+
+        return send(res, 200, {
+          worker: "idle",
+          pending_jobs: 0
+        });
+      }
+
+      const job = nextJobResult.rows[0];
+
+      await db.query(`
+        UPDATE runtime_execution_jobs
+        SET status = 'running'
+        WHERE job_id = $1
+      `, [job.job_id]);
+
+      await db.query(`
+        UPDATE runtime_execution_jobs
+        SET
+          status = 'completed',
+          completed_at = NOW()
+        WHERE job_id = $1
+      `, [job.job_id]);
+
+      await writeEvent({
+        event_type: "runtime.execution.completed",
+        object_id: job.object_id,
+        message: "Execution completed by runtime worker",
+        tenant_id
+      });
+
+      return send(res, 200, {
+        worker: "completed",
+        job_id: job.job_id,
+        object_id: job.object_id,
+        execution_type: job.execution_type
+      });
+    }
     return send(res, 404, {
       error: "not_found",
       path,
