@@ -657,7 +657,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
         evaluated_object: object.object_id
       });
     }
-    // RUNTIME WORKER
+    // RUNTIME WORKER V2
 
     if (req.method === "POST" && path === "/runtime/worker/run") {
 
@@ -675,13 +675,18 @@ if (req.method === "POST" && path === "/runtime/execute") {
         SELECT *
         FROM runtime_execution_jobs
         WHERE tenant_id = $1
-          AND status = 'pending'
+          AND (
+            status = 'pending'
+            OR (
+              status = 'failed'
+              AND COALESCE(retry_count, 0) < 3
+            )
+          )
         ORDER BY created_at ASC
         LIMIT 1
       `, [tenant_id]);
 
       if (nextJobResult.rows.length === 0) {
-
         return send(res, 200, {
           worker: "idle",
           pending_jobs: 0
@@ -692,102 +697,81 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       await db.query(`
         UPDATE runtime_execution_jobs
-        SET status = 'running'
-        WHERE job_id = $1
-      `, [job.job_id]);
-
-      await db.query(`
-        UPDATE runtime_execution_jobs
         SET
-          status = 'completed',
-          completed_at = NOW()
+          status = 'running',
+          started_at = NOW(),
+          last_error = NULL
         WHERE job_id = $1
       `, [job.job_id]);
 
-      await writeEvent({
-        event_type: "runtime.execution.completed",
-        object_id: job.object_id,
-        message: "Execution completed by runtime worker",
-        tenant_id
-      });
+      try {
+        if (job.execution_type === "diagnostic.fail") {
+          throw new Error("Simulated diagnostic failure");
+        }
 
-      return send(res, 200, {
-        worker: "completed",
-        job_id: job.job_id,
-        object_id: job.object_id,
-        execution_type: job.execution_type
-      });
-    }
+        await db.query(`
+          UPDATE runtime_execution_jobs
+          SET
+            status = 'completed',
+            completed_at = NOW(),
+            last_error = NULL
+          WHERE job_id = $1
+        `, [job.job_id]);
 
-    // RUNTIME WORKER
-
-    if (req.method === "POST" && path === "/runtime/worker/run") {
-
-      const auth = requireRole(req, [
-        "runtime_admin"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const nextJobResult = await db.query(`
-        SELECT *
-        FROM runtime_execution_jobs
-        WHERE tenant_id = $1
-          AND status = 'pending'
-        ORDER BY created_at ASC
-        LIMIT 1
-      `, [tenant_id]);
-
-      if (nextJobResult.rows.length === 0) {
+        await writeEvent({
+          event_type: "runtime.execution.completed",
+          object_id: job.object_id,
+          message: `Execution completed: ${job.execution_type}`,
+          tenant_id
+        });
 
         return send(res, 200, {
-          worker: "idle",
-          pending_jobs: 0
+          worker: "completed",
+          job_id: job.job_id,
+          object_id: job.object_id,
+          execution_type: job.execution_type
+        });
+
+      } catch (workerErr) {
+
+        const retryCount = Number(job.retry_count || 0) + 1;
+        const finalStatus = retryCount >= 3 ? "failed_permanent" : "failed";
+
+        await db.query(`
+          UPDATE runtime_execution_jobs
+          SET
+            status = $2,
+            retry_count = $3,
+            last_error = $4,
+            failed_at = NOW()
+          WHERE job_id = $1
+        `, [
+          job.job_id,
+          finalStatus,
+          retryCount,
+          workerErr.message
+        ]);
+
+        await writeEvent({
+          event_type: "runtime.execution.failed",
+          object_id: job.object_id,
+          message: `Execution failed: ${workerErr.message}`,
+          tenant_id
+        });
+
+        return send(res, 500, {
+          worker: "failed",
+          job_id: job.job_id,
+          object_id: job.object_id,
+          execution_type: job.execution_type,
+          retry_count: retryCount,
+          final_status: finalStatus,
+          error: workerErr.message
         });
       }
-
-      const job = nextJobResult.rows[0];
-
-      await db.query(`
-        UPDATE runtime_execution_jobs
-        SET status = 'running'
-        WHERE job_id = $1
-      `, [job.job_id]);
-
-      await db.query(`
-        UPDATE runtime_execution_jobs
-        SET
-          status = 'completed',
-          completed_at = NOW()
-        WHERE job_id = $1
-      `, [job.job_id]);
-
-      await writeEvent({
-        event_type: "runtime.execution.completed",
-        object_id: job.object_id,
-        message: "Execution completed by runtime worker",
-        tenant_id
-      });
-
-      return send(res, 200, {
-        worker: "completed",
-        job_id: job.job_id,
-        object_id: job.object_id,
-        execution_type: job.execution_type
-      });
     }
-    return send(res, 404, {
-      error: "not_found",
-      path,
-      method: req.method
-    });
 
   } catch (err) {
-
     console.error(err);
 
     return send(res, 500, {
