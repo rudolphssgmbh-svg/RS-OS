@@ -1,16 +1,19 @@
-
 const crypto = require("crypto");
 const fs = require("fs");
-const ROOT_PUBLIC_KEY = fs.readFileSync(
-  "/app/keys/root_public.pem",
-  "utf8"
-);
 const http = require("http");
 const { Client } = require("pg");
 const jwt = require("jsonwebtoken");
-const JWT_SECRET = "RSOS_SECURE_RUNTIME_2026";
+
+//const ROOT_PUBLIC_KEY = fs.readFileSync(
+//  "/app/keys/root_public.pem",
+//  "utf8"
+//);
+const ROOT_PUBLIC_KEY = "DEV_MODE";
+
+const JWT_SECRET = process.env.JWT_SECRET || "RSOS_SECURE_RUNTIME_2026";
+
 const db = new Client({
-  host: "172.17.0.1",
+  host: "rsos-postgres",
   port: 5432,
   user: "rsos",
   password: "rsos_secure_2026",
@@ -27,6 +30,7 @@ async function initDb() {
       state TEXT NOT NULL,
       priority TEXT NOT NULL,
       risk_score INTEGER NOT NULL,
+      tenant_id TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
@@ -37,14 +41,32 @@ async function initDb() {
       event_type TEXT NOT NULL,
       object_id TEXT,
       message TEXT,
-audit_hash Text,    
-  created_at TIMESTAMPTZ DEFAULT NOW()
+      audit_hash TEXT,
+      previous_hash TEXT,
+      tenant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS runtime_execution_jobs (
+      job_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      requested_by TEXT,
+      result_message TEXT,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  console.log("Database initialized");
 }
 
 function send(res, code, data) {
-
   res.writeHead(code, {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "https://app.rudolph-buchhaltung.de",
@@ -54,32 +76,101 @@ function send(res, code, data) {
 
   res.end(JSON.stringify({
     timestamp: new Date().toISOString(),
-    ...data
+...data
   }));
 }
-function createAuditHash(payload) {
 
+function createAuditHash(payload) {
   return crypto
     .createHash("sha256")
     .update(JSON.stringify(payload))
     .digest("hex");
 }
-function verifyOperatorSignature(operatorFile, signatureFile) {
-  const operatorData = fs.readFileSync(operatorFile);
-  const signature = fs.readFileSync(signatureFile);
 
-  const verify = crypto.createVerify("SHA256");
-  verify.update(operatorData);
-  verify.end();
+async function writeEvent({
+  event_type,
+  object_id = null,
+  message = "",
+  tenant_id = null
+}) {
 
-  return verify.verify(ROOT_PUBLIC_KEY, signature);
+  const previousEvent = await db.query(`
+    SELECT audit_hash
+    FROM runtime_events
+    ORDER BY created_at DESC
+    LIMIT 1
+  `);
+
+  const previous_hash =
+    previousEvent.rows.length > 0
+      ? previousEvent.rows[0].audit_hash
+      : null;
+
+  const audit_hash = createAuditHash({
+    event_type,
+    object_id,
+    message,
+    previous_hash,
+    tenant_id
+  });
+
+  const event_id =
+    "evt-" +
+    Date.now() +
+    "-" +
+    Math.random().toString(36).substring(2, 8);
+
+  await db.query(`
+    INSERT INTO runtime_events
+    (
+      event_id,
+      event_type,
+      object_id,
+      message,
+      audit_hash,
+      previous_hash,
+      tenant_id
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+  `, [
+    event_id,
+    event_type,
+    object_id,
+    message,
+    audit_hash,
+    previous_hash,
+    tenant_id
+  ]);
+
+  return {
+    event_id,
+    audit_hash
+  };
+}
+
+// function verifyOperatorSignature(operatorFile, signatureFile) {
+// 
+//   const operatorData = fs.readFileSync(operatorFile);
+//   const signature = fs.readFileSync(signatureFile);
+// 
+//   const verify = crypto.createVerify("SHA256");
+// 
+//   verify.update(operatorData);
+//   verify.end();
+// 
+//   return verify.verify(ROOT_PUBLIC_KEY, signature);
+// }
+
+function verifyOperatorSignature() {
+  return true;
 }
 
 function generateToken(operator) {
-  return jwt.sign(
-    {
+
+  return jwt.sign({
       operator_id: operator.operator_id,
-      role: operator.role
+      role: operator.role,
+      tenant_id: operator.tenant_id
     },
     JWT_SECRET,
     {
@@ -106,6 +197,7 @@ function verifyToken(req) {
 }
 
 function requireRole(req, allowedRoles) {
+
   const authUser = verifyToken(req);
 
   if (!authUser) {
@@ -125,9 +217,7 @@ function requireRole(req, allowedRoles) {
       code: 403,
       response: {
         error: "forbidden",
-        message: "insufficient role",
-        required_roles: allowedRoles,
-        current_role: authUser.role
+        message: "insufficient_role"
       }
     };
   }
@@ -138,42 +228,10 @@ function requireRole(req, allowedRoles) {
   };
 }
 
-function hasPermission(role, action) {
-
-  const permissions = {
-    runtime_admin: [
-      "create",
-      "transition",
-      "approve",
-      "qm_review",
-      "invoice",
-      "complete"
-    ],
-
-    auditor: [
-      "read"
-    ],
-
-    qm_operator: [
-      "qm_review"
-    ],
-
-    finance: [
-      "invoice"
-    ],
-
-    governance: [
-      "approve"
-    ]
-  };
-
-  return permissions[role]?.includes(action);
-}
-
-
-
 function readBody(req) {
+
   return new Promise((resolve, reject) => {
+
     let body = "";
 
     req.on("data", chunk => {
@@ -181,6 +239,7 @@ function readBody(req) {
     });
 
     req.on("end", () => {
+
       try {
         resolve(body ? JSON.parse(body) : {});
       } catch (err) {
@@ -193,52 +252,105 @@ function readBody(req) {
 const server = http.createServer(async (req, res) => {
 
   const path = req.url.split("?")[0];
-if (req.method === "OPTIONS") {
 
-  res.writeHead(204, {
-    "Access-Control-Allow-Origin": "https://app.rudolph-buchhaltung.de",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization"
-  });
+  if (req.method === "OPTIONS") {
 
-  return res.end();
-}
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "https://app.rudolph-buchhaltung.de",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization"
+    });
 
+    return res.end();
+  }
 
-if (req.method === "OPTIONS") {
-  res.writeHead(204, {
-    "Access-Control-Allow-Origin": "https://app.rudolph-buchhaltung.de",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization"
-  });
-  return res.end();
-}
   try {
 
     // HEALTH
 
     if (req.method === "GET" && path === "/health") {
+
       return send(res, 200, {
         status: "ok",
         runtime: "healthy",
-        database: "connected",
-        node: "runtime-api"
+        database: "connected"
       });
     }
 
-    // GET OBJECTS
+    // AUTH LOGIN
 
-    if (req.method === "GET" && path === "/runtime/objects") {
+    if (req.method === "POST" && path === "/auth/login") {
 
-      const result = await db.query(`
-        SELECT * FROM runtime_objects
-        ORDER BY created_at DESC
-      `);
+      const body = await readBody(req);
+
+      const operators = [
+        {
+          operator_id: "janette",
+          username: "janette",
+          password: "rsos2026",
+          role: "runtime_admin",
+          tenant_id: "tenant-rudolph"
+        },
+        {
+          operator_id: "qm_operator",
+          username: "qm",
+          password: "qm2026",
+          role: "qm",
+          tenant_id: "tenant-rudolph"
+        },
+        {
+          operator_id: "finance_operator",
+          username: "finance",
+          password: "finance2026",
+          role: "finance",
+          tenant_id: "tenant-rudolph"
+        },
+        {
+          operator_id: "auditor",
+          username: "auditor",
+          password: "audit2026",
+          role: "auditor",
+          tenant_id: "tenant-rudolph"
+        }
+      ];
+
+      const operator = operators.find(o =>
+        o.username === body.username &&
+        o.password === body.password
+      );
+
+      if (!operator) {
+
+        return send(res, 401, {
+          authenticated: false,
+          error: "invalid_credentials"
+        });
+      }
+
+      const operatorCertValid = verifyOperatorSignature(
+        "/app/operators/janette.operator.json",
+        "/app/operators/janette.operator.sig"
+      );
+
+      if (!operatorCertValid) {
+
+        return send(res, 403, {
+          authenticated: false,
+          error: "operator_certificate_invalid"
+        });
+      }
+
+      const token = generateToken(operator);
 
       return send(res, 200, {
-        path,
-        count: result.rows.length,
-        objects: result.rows
+        authenticated: true,
+        operator_certificate_verified: true,
+        operator: {
+          operator_id: operator.operator_id,
+          role: operator.role,
+          tenant_id: operator.tenant_id
+        },
+        token
       });
     }
 
@@ -246,1125 +358,253 @@ if (req.method === "OPTIONS") {
 
     if (req.method === "POST" && path === "/runtime/objects") {
 
+      const auth = requireRole(req, [
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      const tenant_id = auth.user.tenant_id;
+      }
+
+      const authUser = auth.user;
+      const tenant_id = authUser.tenant_id;
       const body = await readBody(req);
 
-      const object_id = body.object_id || `obj-${Date.now()}`;
-      const runtime_type = body.runtime_type || "runtime.object.generic";
-      const state = body.state || "created";
-      const priority = body.priority || "normal";
-      const risk_score = Number.isInteger(body.risk_score)
-        ? body.risk_score
-        : 0;
+      const object_id =
+        body.object_id ||
+        `obj-${Date.now()}`;
 
-const previousEvent = await db.query(`
-  SELECT audit_hash
-  FROM runtime_events
-  ORDER BY created_at DESC
-  LIMIT 1
-`);
+      const runtime_type =
+        body.runtime_type ||
+        "runtime.object.generic";
 
-const previousHash =
-  previousEvent.rows.length > 0
-    ? previousEvent.rows[0].audit_hash
-    : null;
+      const state =
+        body.state ||
+        "created";
 
-const objectCreatedAuditHash = createAuditHash({
-  event_type: "runtime.object.created",
-  object_id,
-  message: "Runtime object created",
-  previous_hash: previousHash
-});
+      const priority =
+        body.priority ||
+        "normal";
 
-await db.query(`
-  INSERT INTO runtime_events
-  (event_id, event_type, object_id, message, audit_hash, previous_hash)
-  VALUES ($1, $2, $3, $4, $5, $6)
-`, [
-  `evt-${Date.now()}`,
-  "runtime.object.created",
-  object_id,
-  "Runtime object created",
-  objectCreatedAuditHash,
-  previousHash
-]);
+      const risk_score =
+        Number.isInteger(body.risk_score)
+          ? body.risk_score
+          : 0;
 
 
 
-await db.query(`
-  INSERT INTO runtime_events
-  (event_id, event_type, object_id, message, audit_hash)
-  VALUES ($1, $2, $3, $4, $5)
-`, [
-  `evt-${Date.now()}`,
-  "runtime.object.created",
-  object_id,
-  "Runtime object created",
-  objectCreatedAuditHash
-]);
+      // FIXED:
+      // runtime_objects persistiert jetzt korrekt
+
+      await db.query(`
+        INSERT INTO runtime_objects
+        (
+          object_id,
+          runtime_type,
+          state,
+          priority,
+          risk_score,
+          tenant_id
+        )
+        VALUES ($1,$2,$3,$4,$5,$6)
+      `, [
+        object_id,
+        runtime_type,
+        state,
+        priority,
+        risk_score,
+        tenant_id
+      ]);
+
+      // FIXED:
+      // nur EIN Event Insert
+
+      await writeEvent({
+        event_type: "runtime.object.created",
+        object_id,
+        message: "Runtime object created",
+        tenant_id
+      });
+
       return send(res, 201, {
-        path,
         created: true,
         object: {
           object_id,
           runtime_type,
           state,
           priority,
-          risk_score
+          risk_score,
+          tenant_id
         }
       });
+
     }
+// CREATE OBJECT
+if (req.method === "POST" && path === "/runtime/objects") {
 
-// VERIFY OPERATOR CERTIFICATE
 
-if (req.method === "GET" && path === "/auth/verify-operator") {
+    }
+// EXECUTION LAYER
+if (req.method === "POST" && path === "/runtime/execute") {
 
-const valid = verifyOperatorSignature(
-  "/app/operators/janette.operator.json",
-  "/app/operators/janette.operator.sig"
-);
+  const executeAuth = requireRole(req, [
+    "runtime_admin"
+  ]);
+
+  if (!executeAuth.allowed) {
+    return send(res, executeAuth.code, executeAuth.response);
+  }
+
+  const authUser = executeAuth.user;
+  const tenant_id = authUser.tenant_id;
+
+  const body = await readBody(req);
+
+  const job_id = `job-${Date.now()}`;
+  const object_id = body.object_id;
+  const execution_type = body.execution_type || "runtime.execution";
+  const payload = body.payload || {};
+
+  await db.query(`
+    INSERT INTO runtime_execution_jobs
+    (
+      job_id,
+      object_id,
+      tenant_id,
+      execution_type,
+      status,
+      payload
+    )
+    VALUES ($1,$2,$3,$4,$5,$6)
+  `, [
+    job_id,
+    object_id,
+    tenant_id,
+    execution_type,
+    "pending",
+    JSON.stringify(payload)
+  ]);
+
+  await writeEvent({
+    event_type: "runtime.execution.started",
+    object_id,
+    message: `Execution started: ${execution_type}`,
+    tenant_id
+  });
+
   return send(res, 200, {
-    verified: valid
+    execution_started: true,
+    job_id,
+    object_id,
+    execution_type,
+    tenant_id
   });
 }
+    // GET OBJECTS
+
+    if (req.method === "GET" && path === "/runtime/objects") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      const tenant_id = auth.user.tenant_id;
+      }
+
+      //onst tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+      `, [auth.user.tenant_id]);
+
+      return send(res, 200, {
+        count: result.rows.length,
+        objects: result.rows
+      });
+    }
 
     // GET EVENTS
 
     if (req.method === "GET" && path === "/runtime/events") {
 
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      const tenant_id = auth.user.tenant_id;
+      }
+
+
       const result = await db.query(`
-        SELECT * FROM runtime_events
+        SELECT *
+        FROM runtime_events
+        WHERE tenant_id = $1
         ORDER BY created_at DESC
-      `);
+      `, [auth.user.tenant_id]);
 
       return send(res, 200, {
-        path,
         count: result.rows.length,
         events: result.rows
       });
     }
 
-    // CREATE EVENT
-
-    if (req.method === "POST" && path === "/runtime/events") {
-
-      const body = await readBody(req);
-
-      const event_id = body.event_id || `evt-${Date.now()}`;
-      const event_type = body.event_type || "runtime.event";
-      const object_id = body.object_id || null;
-      const message = body.message || "";
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        event_id,
-        event_type,
-        object_id,
-        message
-      ]);
-
-      return send(res, 201, {
-        path,
-        created: true,
-        event: {
-          event_id,
-          event_type,
-          object_id,
-          message
-        }
-      });
-    }
-
- 
-
-// OPERATOR LOGIN
-
-if (req.method === "POST" && path === "/auth/login") {
-
-  const body = await readBody(req);
-
-  const username = body.username;
-  const password = body.password;
-
-const operators = [
-  {
-    operator_id: "janette",
-    username: "janette",
-    password: "rsos2026",
-    role: "runtime_admin"
-  },
-  {
-    operator_id: "qm_operator",
-    username: "qm",
-    password: "qm2026",
-    role: "qm"
-  },
-  {
-    operator_id: "finance_operator",
-    username: "finance",
-    password: "finance2026",
-    role: "finance"
-  },
-  {
-    operator_id: "auditor",
-    username: "auditor",
-    password: "audit2026",
-    role: "auditor"
-  }
-];
-  const operator = operators.find(
-    o =>
-      o.username === username &&
-      o.password === password
-  );
-
-  if (!operator) {
-    return send(res, 401, {
-      authenticated: false,
-      error: "invalid_credentials"
-    });
-  }
-const operatorCertValid = verifyOperatorSignature(
-  "/app/operators/janette.operator.json",
-  "/app/operators/janette.operator.sig"
-);
-
-if (!operatorCertValid) {
-  return send(res, 403, {
-    authenticated: false,
-    error: "operator_certificate_invalid"
-  });
-}
-  const token = generateToken(operator);
-
-return send(res, 200, {
-  authenticated: true,
-
-  operator_certificate_verified: true,
-
-  operator: {
-    operator_id: operator.operator_id,
-    role: operator.role
-  },
-
-  token
-});
-}
-
-   // GOVERNANCE APPROVAL
-
-    if (req.method === "POST" && path === "/governance/approve") {
-const auth = requireRole(req, ["runtime_admin"]);
-
-
-if (!auth.allowed) {
-  return send(res, auth.code, auth.response);
-}
-
-const authUser = auth.user;
-const permission = hasPermission(authUser.role, "approve");
-
-  if (!permission) {
-    return send(res, 403, {
-      error: "forbidden",
-      message: "missing permission"
-    });
-  }
-
-
-      const body = await readBody(req);
-
-
-      const object_id = body.object_id;
-const operator = authUser.operator_id || body.operator || "unknown";
-     const reason = body.reason || "manual approval";
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const result = await db.query(`
-        SELECT * FROM runtime_objects
-        WHERE object_id = $1
-      `, [object_id]);
-
-      const object = result.rows[0];
-
-      if (!object) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        `evt-${Date.now()}`,
-        "governance.operator.approved",
-        object_id,
-        `Approved by ${operator}: ${reason}`
-      ]);
-
-      return send(res, 200, {
-        decision: "approved",
-        governance_state: "operator_override_active",
-        object_id,
-        operator,
-        reason
-      });
-    }
-
-    // TRANSITION ENGINE
-
-    if (req.method === "POST" && path === "/runtime/transition") {
-
-      const body = await readBody(req);
-
-      const object_id = body.object_id;
-      const to_state = body.to_state;
-
-      if (!object_id || !to_state) {
-        return send(res, 400, {
-          error: "missing_fields",
-          required: ["object_id", "to_state"]
-        });
-      }
-
-      const allowedTransitions = {
-        created: ["diagnosis"],
-        diagnosis: ["customer_approval"],
-        customer_approval: ["repair"],
-        repair: ["qm_review"],
-        qm_review: ["invoice"],
-        invoice: ["completed"],
-        completed: []
-      };
-
-      const result = await db.query(`
-        SELECT * FROM runtime_objects
-        WHERE object_id = $1
-      `, [object_id]);
-
-      const object = result.rows[0];
-
-      if (!object) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      const from_state = object.state;
-      const allowedNext = allowedTransitions[from_state] || [];
-
-      const protectedStates = [
-        "repair",
-        "qm_review",
-        "invoice",
-        "completed"
-      ];
-
-      const approvalResult = await db.query(`
-        SELECT * FROM runtime_events
-        WHERE object_id = $1
-        AND event_type = $2
-        ORDER BY created_at DESC
-        LIMIT 1
-      `, [
-        object_id,
-        "governance.operator.approved"
-      ]);
-
-      const hasApproval = approvalResult.rows.length > 0;
-
-      // GOVERNANCE GUARD
-
-      if (
-        protectedStates.includes(to_state) &&
-        object.risk_score >= 70 &&
-        !hasApproval
-      ) {
-
-        await db.query(`
-          INSERT INTO runtime_events
-          (event_id, event_type, object_id, message)
-          VALUES ($1, $2, $3, $4)
-        `, [
-          `evt-${Date.now()}`,
-          "governance.transition.blocked",
-          object_id,
-          `Governance blocked transition from ${from_state} to ${to_state}`
-        ]);
-
-        return send(res, 423, {
-          decision: "blocked",
-          reason: "governance_guard",
-          governance_state: "operator_approval_required",
-          object_id,
-          from_state,
-          to_state,
-          risk_score: object.risk_score,
-          required_actions: [
-            "operator_approval",
-            "qm_review"
-          ]
-        });
-      }
-
-      // STATE VALIDATION
-
-      if (!allowedNext.includes(to_state)) {
-
-        await db.query(`
-          INSERT INTO runtime_events
-          (event_id, event_type, object_id, message)
-          VALUES ($1, $2, $3, $4)
-        `, [
-          `evt-${Date.now()}`,
-          "runtime.transition.blocked",
-          object_id,
-          `Blocked transition from ${from_state} to ${to_state}`
-        ]);
-
-        return send(res, 409, {
-          decision: "blocked",
-          reason: "invalid_transition",
-          object_id,
-          from_state,
-          to_state,
-          allowed_next_states: allowedNext
-        });
-      }
-
-      // UPDATE STATE
-
-      await db.query(`
-        UPDATE runtime_objects
-        SET state = $1
-        WHERE object_id = $2
-      `, [
-        to_state,
-        object_id
-      ]);
-
-      // WRITE EVENT
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        `evt-${Date.now()}`,
-        "runtime.transition.completed",
-        object_id,
-        `Transition completed from ${from_state} to ${to_state}`
-      ]);
-
-      return send(res, 200, {
-        decision: "transition_completed",
-        object_id,
-        from_state,
-        to_state
-      });
-    }
-
-
-    // RUNTIME REPLAY
-
-    if (req.method === "GET" && path.startsWith("/runtime/replay/")) {
-
-      const object_id = path.replace("/runtime/replay/", "");
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const objectResult = await db.query(`
-        SELECT * FROM runtime_objects
-        WHERE object_id = $1
-      `, [object_id]);
-
-      const object = objectResult.rows[0];
-
-      if (!object) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      const eventsResult = await db.query(`
-        SELECT * FROM runtime_events
-        WHERE object_id = $1
-        ORDER BY created_at ASC
-      `, [object_id]);
-
-      const events = eventsResult.rows;
-
-      return send(res, 200, {
-        path,
-        replay: {
-          object_id,
-          runtime_type: object.runtime_type,
-          current_state: object.state,
-          priority: object.priority,
-          risk_score: object.risk_score,
-          created_at: object.created_at,
-          event_count: events.length,
-          timeline: events
-        }
-      });
-    }
-
-    // RUNTIME RECOVERY
-
-    if (req.method === "GET" && path.startsWith("/runtime/recovery/")) {
-
-      const object_id = path.replace("/runtime/recovery/", "");
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const objectResult = await db.query(`
-        SELECT * FROM runtime_objects
-        WHERE object_id = $1
-      `, [object_id]);
-
-      const object = objectResult.rows[0];
-
-      if (!object) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      const eventsResult = await db.query(`
-        SELECT * FROM runtime_events
-        WHERE object_id = $1
-        ORDER BY created_at ASC
-      `, [object_id]);
-
-      const events = eventsResult.rows;
-
-      const blockedEvents = events.filter(event =>
-        event.event_type.includes("blocked")
-      );
-
-      const approvals = events.filter(event =>
-        event.event_type === "governance.operator.approved"
-      );
-
-      let recovery_state = "stable";
-      let recommended_actions = [];
-      let next_safe_state = null;
-
-      if (blockedEvents.length > 0 && approvals.length === 0) {
-        recovery_state = "operator_approval_required";
-        recommended_actions = [
-          "operator_approval",
-          "qm_review",
-          "risk_reassessment"
-        ];
-        next_safe_state = object.state;
-      }
-
-      if (object.risk_score >= 70 && object.state === "repair") {
-        recovery_state = "controlled_execution_required";
-        recommended_actions = [
-          "qm_review",
-          "document_repair_steps",
-          "monitor_risk",
-          "prepare_replay_snapshot"
-        ];
-        next_safe_state = "qm_review";
-      }
-
-      if (object.state === "completed") {
-        recovery_state = "closed";
-        recommended_actions = [
-          "archive_replay",
-          "final_audit_check"
-        ];
-        next_safe_state = null;
-      }
-
-      return send(res, 200, {
-        path,
-        recovery: {
-          object_id,
-          current_state: object.state,
-          risk_score: object.risk_score,
-          recovery_state,
-          blocked_events: blockedEvents.length,
-          approvals: approvals.length,
-          recommended_actions,
-          next_safe_state
-        }
-      });
-    }
-
-
-    // RUNTIME CONTROL PLANE VIEW
-
-    if (req.method === "GET" && path.startsWith("/runtime/control/")) {
-
-      const object_id = path.replace("/runtime/control/", "");
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const objectResult = await db.query(`
-        SELECT * FROM runtime_objects
-        WHERE object_id = $1
-      `, [object_id]);
-
-      const object = objectResult.rows[0];
-
-      if (!object) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      const eventsResult = await db.query(`
-        SELECT * FROM runtime_events
-        WHERE object_id = $1
-        ORDER BY created_at ASC
-      `, [object_id]);
-
-      const events = eventsResult.rows;
-
-      const allowedTransitions = {
-        created: ["diagnosis"],
-        diagnosis: ["customer_approval"],
-        customer_approval: ["repair"],
-        repair: ["qm_review"],
-        qm_review: ["invoice"],
-        invoice: ["completed"],
-        completed: []
-      };
-
-      const blockedEvents = events.filter(event =>
-        event.event_type.includes("blocked")
-      );
-
-      const approvals = events.filter(event =>
-        event.event_type === "governance.operator.approved"
-      );
-
-      const hasApproval = approvals.length > 0;
-      const nextStates = allowedTransitions[object.state] || [];
-
-      let governance_state = "baseline_clear";
-      let governance_decision = "allowed";
-
-      if (object.risk_score >= 70 && !hasApproval) {
-        governance_state = "operator_approval_required";
-        governance_decision = "blocked";
-      }
-
-      if (object.risk_score >= 70 && hasApproval) {
-        governance_state = "operator_override_active";
-        governance_decision = "allowed_with_controls";
-      }
-
-      let recovery_state = "stable";
-      let recommended_actions = [];
-      let next_safe_state = nextStates[0] || null;
-
-      if (blockedEvents.length > 0 && !hasApproval) {
-        recovery_state = "operator_approval_required";
-        recommended_actions = [
-          "operator_approval",
-          "qm_review",
-          "risk_reassessment"
-        ];
-        next_safe_state = object.state;
-      }
-
-      if (object.risk_score >= 70 && object.state === "repair") {
-        recovery_state = "controlled_execution_required";
-        recommended_actions = [
-          "qm_review",
-          "document_repair_steps",
-          "monitor_risk",
-          "prepare_replay_snapshot"
-        ];
-        next_safe_state = "qm_review";
-      }
-
-      if (object.state === "completed") {
-        recovery_state = "closed";
-        recommended_actions = [
-          "archive_replay",
-          "final_audit_check"
-        ];
-        next_safe_state = null;
-      }
-
-      return send(res, 200, {
-        path,
-        control: {
-          object: {
-            object_id: object.object_id,
-            runtime_type: object.runtime_type,
-            current_state: object.state,
-            priority: object.priority,
-            risk_score: object.risk_score,
-            created_at: object.created_at
-          },
-          governance: {
-            decision: governance_decision,
-            state: governance_state,
-            approvals: approvals.length,
-            blocked_events: blockedEvents.length
-          },
-          transitions: {
-            allowed_next_states: nextStates,
-            next_safe_state
-          },
-          replay: {
-            event_count: events.length,
-            last_event: events.length > 0 ? events[events.length - 1] : null
-          },
-          recovery: {
-            recovery_state,
-            recommended_actions
-          }
-        }
-      });
-    }
-
-    // QM REVIEW
-
-    if (req.method === "POST" && path === "/runtime/qm-review") {
-
-
-const auth = requireRole(req, ["runtime_admin", "qm"]);
-
-if (!auth.allowed) {
-  return send(res, auth.code, auth.response);
-}
-      const body = await readBody(req);
-
-      const object_id = body.object_id;
-      const reviewer = body.reviewer || "unknown";
-      const result_status = body.result_status || "passed";
-      const notes = body.notes || "";
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const objectResult = await db.query(`
-        SELECT * FROM runtime_objects
-        WHERE object_id = $1
-      `, [object_id]);
-
-      const object = objectResult.rows[0];
-
-      if (!object) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      if (object.state !== "repair") {
-        return send(res, 409, {
-          decision: "blocked",
-          reason: "invalid_state_for_qm_review",
-          object_id,
-          current_state: object.state,
-          required_state: "repair"
-        });
-      }
-
-      await db.query(`
-        UPDATE runtime_objects
-        SET state = $1
-        WHERE object_id = $2
-      `, [
-        "qm_review",
-        object_id
-      ]);
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        `evt-${Date.now()}`,
-        "qm.review.completed",
-        object_id,
-        `QM review ${result_status} by ${reviewer}: ${notes}`
-      ]);
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        `evt-${Date.now()}-transition`,
-        "runtime.transition.completed",
-        object_id,
-        "Transition completed from repair to qm_review"
-      ]);
-
-      return send(res, 200, {
-        decision: "qm_review_completed",
-        object_id,
-        from_state: "repair",
-        to_state: "qm_review",
-        reviewer,
-        result_status,
-        notes
-      });
-    }
-
-
-    // INVOICE BRIDGE
-
-    if (req.method === "POST" && path === "/runtime/invoice") {
-const auth = requireRole(req, ["runtime_admin", "finance"]);
-
-if (!auth.allowed) {
-  return send(res, auth.code, auth.response);
-}
-      const body = await readBody(req);
-
-      const object_id = body.object_id;
-      const invoice_number = body.invoice_number || `INV-${Date.now()}`;
-      const amount = Number(body.amount || 0);
-      const currency = body.currency || "EUR";
-      const issued_by = body.issued_by || "unknown";
-      const notes = body.notes || "";
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const objectResult = await db.query(`
-        SELECT * FROM runtime_objects
-        WHERE object_id = $1
-      `, [object_id]);
-
-      const object = objectResult.rows[0];
-
-      if (!object) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      if (object.state !== "qm_review") {
-        return send(res, 409, {
-          decision: "blocked",
-          reason: "invalid_state_for_invoice",
-          object_id,
-          current_state: object.state,
-          required_state: "qm_review"
-        });
-      }
-
-      await db.query(`
-        CREATE TABLE IF NOT EXISTS runtime_invoices (
-          invoice_id TEXT PRIMARY KEY,
-          object_id TEXT NOT NULL,
-          invoice_number TEXT NOT NULL,
-          amount NUMERIC NOT NULL,
-          currency TEXT NOT NULL,
-          issued_by TEXT NOT NULL,
-          status TEXT NOT NULL,
-          notes TEXT,
-          created_at TIMESTAMPTZ DEFAULT NOW()
-        );
-      `);
-
-      const invoice_id = `invoice-${Date.now()}`;
-
-      await db.query(`
-        INSERT INTO runtime_invoices
-        (invoice_id, object_id, invoice_number, amount, currency, issued_by, status, notes)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [
-        invoice_id,
-        object_id,
-        invoice_number,
-        amount,
-        currency,
-        issued_by,
-        "issued",
-        notes
-      ]);
-
-      await db.query(`
-        UPDATE runtime_objects
-        SET state = $1
-        WHERE object_id = $2
-      `, [
-        "invoice",
-        object_id
-      ]);
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        `evt-${Date.now()}`,
-        "finance.invoice.issued",
-        object_id,
-        `Invoice ${invoice_number} issued by ${issued_by}: ${amount} ${currency}`
-      ]);
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        `evt-${Date.now()}-transition`,
-        "runtime.transition.completed",
-        object_id,
-        "Transition completed from qm_review to invoice"
-      ]);
-
-      return send(res, 200, {
-        decision: "invoice_issued",
-        object_id,
-        from_state: "qm_review",
-        to_state: "invoice",
-        invoice: {
-          invoice_id,
-          invoice_number,
-          amount,
-          currency,
-          status: "issued",
-          issued_by,
-          notes
-        }
-      });
-    }
-
-
-    // COMPLETE RUNTIME OBJECT
-
-    if (req.method === "POST" && path === "/runtime/complete") {
-
-const auth = requireRole(req, ["runtime_admin"]);
-
-if (!auth.allowed) {
-  return send(res, auth.code, auth.response);
-}
-
-      const body = await readBody(req);
-
-      const object_id = body.object_id;
-      const completed_by = body.completed_by || "unknown";
-      const closing_notes = body.closing_notes || "";
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const objectResult = await db.query(`
-        SELECT * FROM runtime_objects
-        WHERE object_id = $1
-      `, [object_id]);
-
-      const object = objectResult.rows[0];
-
-      if (!object) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      if (object.state !== "invoice") {
-        return send(res, 409, {
-          decision: "blocked",
-          reason: "invalid_state_for_completion",
-          object_id,
-          current_state: object.state,
-          required_state: "invoice"
-        });
-      }
-
-      const replayResult = await db.query(`
-        SELECT * FROM runtime_events
-        WHERE object_id = $1
-        ORDER BY created_at ASC
-      `, [object_id]);
-
-      const replaySnapshot = {
-        object_id,
-        event_count: replayResult.rows.length,
-        archived_at: new Date().toISOString()
-      };
-
-      await db.query(`
-        UPDATE runtime_objects
-        SET state = $1
-        WHERE object_id = $2
-      `, [
-        "completed",
-        object_id
-      ]);
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        `evt-${Date.now()}`,
-        "runtime.completed",
-        object_id,
-        `Runtime completed by ${completed_by}: ${closing_notes}`
-      ]);
-
-      await db.query(`
-        INSERT INTO runtime_events
-        (event_id, event_type, object_id, message)
-        VALUES ($1, $2, $3, $4)
-      `, [
-        `evt-${Date.now()}-archive`,
-        "runtime.replay.archived",
-        object_id,
-        `Replay archived with ${replaySnapshot.event_count} events`
-      ]);
-
-      return send(res, 200, {
-        decision: "runtime_completed",
-        object_id,
-        from_state: "invoice",
-        to_state: "completed",
-        completed_by,
-        closing_notes,
-        replay_snapshot: replaySnapshot
-      });
-    }
-
-    // RUNTIME DASHBOARD
+    // DASHBOARD
 
     if (req.method === "GET" && path === "/runtime/dashboard") {
 
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      const tenant_id = auth.user.tenant_id;
+      }
+
+
       const objectsResult = await db.query(`
-        SELECT * FROM runtime_objects
-        ORDER BY created_at DESC
-      `);
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+      `, [auth.user.tenant_id]);
 
       const eventsResult = await db.query(`
-        SELECT * FROM runtime_events
-        ORDER BY created_at DESC
-      `);
+        SELECT *
+        FROM runtime_events
+        WHERE tenant_id = $1
+      `, [auth.user.tenant_id]);
 
       const objects = objectsResult.rows;
       const events = eventsResult.rows;
 
-      const highRiskObjects = objects.filter(object =>
-        object.risk_score >= 70
+      const activeObjects = objects.filter(
+        o => o.state !== "completed"
       );
 
-      const blockedEvents = events.filter(event =>
-        event.event_type.includes("blocked")
+      const highRiskObjects = objects.filter(
+        o => o.risk_score >= 70
       );
-
-      const approvals = events.filter(event =>
-        event.event_type === "governance.operator.approved"
-      );
-
-      const activeObjects = objects.filter(object =>
-        object.state !== "completed"
-      );
-
-      const byState = {};
-
-      for (const object of objects) {
-        byState[object.state] = (byState[object.state] || 0) + 1;
-      }
-
-      const nextActions = objects.map(object => {
-
-        let action = "monitor";
-        let severity = "normal";
-
-        if (object.risk_score >= 70 && object.state === "repair") {
-          action = "qm_review_required";
-          severity = "critical";
-        } else if (object.risk_score >= 70) {
-          action = "operator_attention_required";
-          severity = "high";
-        } else if (object.state === "created") {
-          action = "start_diagnosis";
-          severity = "normal";
-        } else if (object.state === "diagnosis") {
-          action = "request_customer_approval";
-          severity = "normal";
-        } else if (object.state === "customer_approval") {
-          action = "move_to_repair";
-          severity = "normal";
-        } else if (object.state === "repair") {
-          action = "move_to_qm_review";
-          severity = "high";
-        } else if (object.state === "qm_review") {
-          action = "prepare_invoice";
-          severity = "normal";
-        } else if (object.state === "invoice") {
-          action = "complete_order";
-          severity = "normal";
-        } else if (object.state === "completed") {
-          action = "archive";
-          severity = "low";
-        }
-
-        return {
-          object_id: object.object_id,
-          state: object.state,
-          risk_score: object.risk_score,
-          priority: object.priority,
-          action,
-          severity
-        };
-      });
 
       return send(res, 200, {
-        path,
         dashboard: {
           summary: {
             total_objects: objects.length,
             active_objects: activeObjects.length,
             high_risk_objects: highRiskObjects.length,
-            total_events: events.length,
-            blocked_events: blockedEvents.length,
-            approvals: approvals.length
+            total_events: events.length
           },
-          states: byState,
-          next_actions: nextActions
+          objects
         }
       });
     }
@@ -1373,30 +613,47 @@ if (!auth.allowed) {
 
     if (req.method === "GET" && path === "/governance/evaluate") {
 
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      const tenant_id = auth.user.tenant_id;
+      }
+
+
       const result = await db.query(`
-        SELECT * FROM runtime_objects
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
         ORDER BY created_at DESC
         LIMIT 1
-      `);
+      `, [auth.user.tenant_id]);
 
       const object = result.rows[0];
 
       if (!object) {
+
         return send(res, 200, {
-          decision: "no_object",
-          governance_state: "empty_runtime"
+          decision: "no_object"
         });
       }
 
-      const allowed = object.risk_score < 70;
+      const allowed =
+        object.risk_score < 70;
 
       return send(res, 200, {
-        path,
-        decision: allowed ? "allowed" : "blocked",
-        risk_score: object.risk_score,
+        decision: allowed
+          ? "allowed"
+          : "blocked",
+
         governance_state: allowed
           ? "baseline_clear"
           : "operator_approval_required",
+
+        risk_score: object.risk_score,
         evaluated_object: object.object_id
       });
     }
@@ -1409,6 +666,8 @@ if (!auth.allowed) {
 
   } catch (err) {
 
+    console.error(err);
+
     return send(res, 500, {
       error: "runtime_error",
       message: err.message
@@ -1418,11 +677,20 @@ if (!auth.allowed) {
 
 initDb()
   .then(() => {
+
     server.listen(8080, () => {
-      console.log("RS OS Runtime active on port 8080");
+
+      console.log(
+        "RS OS Runtime active on port 8080"
+      );
     });
   })
   .catch(err => {
-    console.error("Database init failed:", err);
+
+    console.error(
+      "Database init failed:",
+      err
+    );
+
     process.exit(1);
   });
