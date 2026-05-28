@@ -465,6 +465,9 @@ if (req.method === "POST" && path === "/runtime/execute") {
   const object_id = body.object_id;
   const execution_type = body.execution_type || "runtime.execution";
   const payload = body.payload || {};
+  const next_execution_type = body.next_execution_type || null;
+  const workflow_id = body.workflow_id || job_id;
+  const chain_position = Number(body.chain_position || 0);
 
   await db.query(`
     INSERT INTO runtime_execution_jobs
@@ -474,16 +477,22 @@ if (req.method === "POST" && path === "/runtime/execute") {
       tenant_id,
       execution_type,
       status,
-      payload
+      payload,
+      next_execution_type,
+      workflow_id,
+      chain_position
     )
-    VALUES ($1,$2,$3,$4,$5,$6)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
   `, [
     job_id,
     object_id,
     tenant_id,
     execution_type,
     "pending",
-    JSON.stringify(payload)
+    JSON.stringify(payload),
+    next_execution_type,
+    workflow_id,
+    chain_position
   ]);
 
   await writeEvent({
@@ -659,6 +668,87 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
+    // RUNTIME SCHEDULE API V1
+
+    if (req.method === "POST" && path === "/runtime/schedule") {
+
+      const auth = requireRole(req, [
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+      const body = await readBody(req);
+
+      const object_id = body.object_id;
+      const execution_type = body.execution_type || "diagnostic.run";
+      const payload = body.payload || {};
+      const priority = body.priority || 100;
+      const delay_seconds = body.delay_seconds || 0;
+
+      const scheduled_for = new Date(
+        Date.now() + delay_seconds * 1000
+      ).toISOString();
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const job_id = `job-${Date.now()}`;
+
+      const result = await db.query(`
+        INSERT INTO runtime_execution_jobs (
+          job_id,
+          tenant_id,
+          object_id,
+          execution_type,
+          status,
+          requested_by,
+          payload,
+          scheduled_for,
+          available_at,
+          priority
+        )
+        VALUES (
+          $1, $2, $3, $4, 'pending', $5, $6, $7, $7, $8
+        )
+        RETURNING
+          job_id,
+          object_id,
+          execution_type,
+          status,
+          scheduled_for,
+          priority
+      `, [
+        job_id,
+        tenant_id,
+        object_id,
+        execution_type,
+        auth.user.username || "runtime_admin",
+        JSON.stringify(payload),
+        scheduled_for,
+        priority
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.job.scheduled",
+        object_id,
+        message: `Runtime job scheduled for ${scheduled_for}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        scheduled: true,
+        job: result.rows[0]
+      });
+    }
+
     // RUNTIME WORKER V4 - LEASE LOCKING
 
     if (req.method === "POST" && path === "/runtime/worker/run") {
@@ -749,6 +839,139 @@ if (req.method === "POST" && path === "/runtime/execute") {
           job.job_id,
           worker_id
         ]);
+
+        // WORKFLOW DAG V1
+        const dagPayload = job.payload || {};
+        const dag = dagPayload.dag || {};
+        const edges = Array.isArray(dag.edges) ? dag.edges : [];
+
+        let nextTypes = [];
+
+        if (job.next_execution_type) {
+          nextTypes.push(job.next_execution_type);
+        }
+
+        for (const edge of edges) {
+          if (edge.from === job.execution_type) {
+
+            if (Array.isArray(edge.to)) {
+              nextTypes.push(...edge.to);
+            } else if (edge.to) {
+              nextTypes.push(edge.to);
+            }
+          }
+        }
+
+        nextTypes = [...new Set(nextTypes)];
+
+        for (const nextType of nextTypes) {
+
+          const nextJobId = `job-${Date.now()}-${Math.random()
+            .toString(16)
+            .slice(2, 8)}`;
+
+          // DAG V2 dependency resolution
+
+          const dependencyRows = await db.query(`
+            SELECT from_execution_type
+            FROM runtime_workflow_dependencies
+            WHERE workflow_id = $1
+              AND to_execution_type = $2
+          `, [
+            job.workflow_id || job.job_id,
+            nextType
+          ]);
+
+          const requiredParents = dependencyRows.rows.map(
+            r => r.from_execution_type
+          );
+
+          const completedRows = await db.query(`
+            SELECT DISTINCT execution_type
+            FROM runtime_execution_jobs
+            WHERE workflow_id = $1
+              AND status = 'completed'
+          `, [
+            job.workflow_id || job.job_id
+          ]);
+
+          const completedTypes = completedRows.rows.map(
+            r => r.execution_type
+          );
+
+          const allSatisfied = requiredParents.every(
+            p => completedTypes.includes(p)
+          );
+
+          if (!allSatisfied) {
+
+            await writeEvent({
+              event_type: "runtime.workflow.waiting_dependencies",
+              object_id: job.object_id,
+              message: `Waiting dependencies for ${nextType}`,
+              tenant_id
+            });
+
+            continue;
+          }
+
+          const existingJob = await db.query(`
+            SELECT job_id
+            FROM runtime_execution_jobs
+            WHERE workflow_id = $1
+              AND execution_type = $2
+            LIMIT 1
+          `, [
+            job.workflow_id || job.job_id,
+            nextType
+          ]);
+
+          if (existingJob.rows.length > 0) {
+            continue;
+          }
+
+          await db.query(`
+            INSERT INTO runtime_execution_jobs (
+              job_id,
+              tenant_id,
+              object_id,
+              execution_type,
+              status,
+              payload,
+              workflow_id,
+              parent_job_id,
+              chain_position,
+              requested_by,
+              created_at
+            )
+            VALUES (
+              $1,$2,$3,$4,
+              'pending',
+              $5,
+              $6,
+              $7,
+              $8,
+              'workflow-dag-engine',
+              NOW()
+            )
+          `, [
+            nextJobId,
+            tenant_id,
+            job.object_id,
+            nextType,
+            dagPayload,
+            job.workflow_id || job.job_id,
+            job.job_id,
+            Number(job.chain_position || 0) + 1
+          ]);
+
+          await writeEvent({
+            event_type: "runtime.workflow.dag_job_created",
+            object_id: job.object_id,
+            message: `DAG job created: ${nextJobId} -> ${nextType}`,
+            tenant_id
+          });
+        }
 
         await writeEvent({
           event_type: "runtime.execution.completed",
@@ -973,6 +1196,81 @@ if (req.method === "POST" && path === "/runtime/execute") {
         job
       });
     }
+
+    // RUNTIME WORKFLOW STATE V1
+
+    if (req.method === "GET" && path.startsWith("/runtime/workflows/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+      const workflow_id = path.split("/").pop();
+
+      const jobsResult = await db.query(`
+        SELECT
+          job_id,
+          object_id,
+          execution_type,
+          parent_job_id,
+          workflow_id,
+          chain_position,
+          status,
+          retry_count,
+          last_error,
+          created_at,
+          started_at,
+          completed_at,
+          failed_at
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND workflow_id = $2
+        ORDER BY chain_position ASC, created_at ASC
+      `, [
+        tenant_id,
+        workflow_id
+      ]);
+
+      const jobs = jobsResult.rows;
+
+      const counts = jobs.reduce((acc, job) => {
+        acc[job.status] = (acc[job.status] || 0) + 1;
+        return acc;
+      }, {});
+
+      let workflow_status = "unknown";
+
+      if (jobs.length === 0) {
+        workflow_status = "not_found";
+      } else if ((counts.failed_permanent || 0) > 0) {
+        workflow_status = "failed";
+      } else if ((counts.running || 0) > 0) {
+        workflow_status = "running";
+      } else if ((counts.pending || 0) > 0 || (counts.failed || 0) > 0) {
+        workflow_status = "blocked_or_pending";
+      } else if (jobs.every(j => j.status === "completed")) {
+        workflow_status = "completed";
+      } else {
+        workflow_status = "mixed";
+      }
+
+      return send(res, 200, {
+        workflow: {
+          workflow_id,
+          status: workflow_status,
+          counts,
+          job_count: jobs.length,
+          jobs
+        }
+      });
+    }
+
 
   } catch (err) {
     console.error(err);
