@@ -658,7 +658,8 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
-    // RUNTIME WORKER V3
+
+    // RUNTIME WORKER V4 - LEASE LOCKING
 
     if (req.method === "POST" && path === "/runtime/worker/run") {
 
@@ -671,6 +672,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
       }
 
       const tenant_id = auth.user.tenant_id;
+      const worker_id = `worker-${Date.now()}`;
 
       await db.query("BEGIN");
 
@@ -684,8 +686,16 @@ if (req.method === "POST" && path === "/runtime/execute") {
               status = 'failed'
               AND COALESCE(retry_count, 0) < 3
             )
+            OR (
+              status = 'running'
+              AND lock_expires_at IS NOT NULL
+              AND lock_expires_at < NOW()
+            )
           )
-        ORDER BY created_at ASC
+          AND COALESCE(available_at, NOW()) <= NOW()
+        ORDER BY
+          priority ASC,
+          created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
       `, [tenant_id]);
@@ -706,40 +716,49 @@ if (req.method === "POST" && path === "/runtime/execute") {
         UPDATE runtime_execution_jobs
         SET
           status = 'running',
-          started_at = NOW(),
+          started_at = COALESCE(started_at, NOW()),
+          locked_at = NOW(),
+          lock_expires_at = NOW() + interval '60 seconds',
+          worker_id = $2,
           last_error = NULL
         WHERE job_id = $1
-      `, [job.job_id]);
+      `, [
+        job.job_id,
+        worker_id
+      ]);
 
       await db.query("COMMIT");
 
       try {
 
-        if (
-          job.execution_type === "diagnostic.fail"
-        ) {
-          throw new Error(
-            "Simulated diagnostic failure"
-          );
+        if (job.execution_type === "diagnostic.fail") {
+          throw new Error("Simulated diagnostic failure");
         }
 
         await db.query(`
           UPDATE runtime_execution_jobs
           SET
             status = 'completed',
-            completed_at = NOW()
+            completed_at = NOW(),
+            locked_at = NULL,
+            lock_expires_at = NULL
           WHERE job_id = $1
-        `, [job.job_id]);
+            AND worker_id = $2
+        `, [
+          job.job_id,
+          worker_id
+        ]);
 
         await writeEvent({
           event_type: "runtime.execution.completed",
           object_id: job.object_id,
-          message: "Execution completed by runtime worker",
+          message: `Execution completed by ${worker_id}`,
           tenant_id
         });
 
         return send(res, 200, {
           worker: "completed",
+          worker_id,
           job_id: job.job_id,
           object_id: job.object_id,
           execution_type: job.execution_type
@@ -747,13 +766,10 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       } catch (workerErr) {
 
-        const retryCount =
-          (job.retry_count || 0) + 1;
-
-        const finalStatus =
-          retryCount >= 3
-            ? "failed_permanent"
-            : "failed";
+        const retryCount = Number(job.retry_count || 0) + 1;
+        const finalStatus = retryCount >= 3
+          ? "failed_permanent"
+          : "failed";
 
         await db.query(`
           UPDATE runtime_execution_jobs
@@ -761,26 +777,29 @@ if (req.method === "POST" && path === "/runtime/execute") {
             status = $2,
             retry_count = $3,
             failed_at = NOW(),
-            last_error = $4
+            last_error = $4,
+            locked_at = NULL,
+            lock_expires_at = NULL
           WHERE job_id = $1
+            AND worker_id = $5
         `, [
           job.job_id,
           finalStatus,
           retryCount,
-          workerErr.message
+          workerErr.message,
+          worker_id
         ]);
 
         await writeEvent({
-          event_type:
-            "runtime.execution.failed",
+          event_type: "runtime.execution.failed",
           object_id: job.object_id,
-          message:
-            `Execution failed: ${workerErr.message}`,
+          message: `Execution failed by ${worker_id}: ${workerErr.message}`,
           tenant_id
         });
 
         return send(res, 500, {
           worker: "failed",
+          worker_id,
           job_id: job.job_id,
           object_id: job.object_id,
           execution_type: job.execution_type,
@@ -849,6 +868,108 @@ if (req.method === "POST" && path === "/runtime/execute") {
             failedResult.rows[0].failed_permanent_count,
           recent_jobs: recentResult.rows
         }
+      });
+    }
+
+    // RUNTIME DEAD LETTER QUEUE
+
+    if (req.method === "GET" && path === "/runtime/dead-letter") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT
+          job_id,
+          object_id,
+          execution_type,
+          status,
+          retry_count,
+          last_error,
+          failed_at,
+          created_at
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND status = 'failed_permanent'
+        ORDER BY failed_at DESC NULLS LAST, created_at DESC
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        dead_letter: {
+          count: result.rows.length,
+          jobs: result.rows
+        }
+      });
+    }
+
+    if (req.method === "POST" && path === "/runtime/dead-letter/requeue") {
+
+      const auth = requireRole(req, [
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+      const body = await readBody(req);
+      const job_id = body.job_id;
+
+      if (!job_id) {
+        return send(res, 400, {
+          error: "missing_job_id"
+        });
+      }
+
+      const result = await db.query(`
+        UPDATE runtime_execution_jobs
+        SET
+          status = 'pending',
+          retry_count = 0,
+          last_error = NULL,
+          failed_at = NULL
+        WHERE job_id = $1
+          AND tenant_id = $2
+          AND status = 'failed_permanent'
+        RETURNING
+          job_id,
+          object_id,
+          execution_type,
+          status,
+          retry_count
+      `, [
+        job_id,
+        tenant_id
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "dead_letter_job_not_found",
+          job_id
+        });
+      }
+
+      const job = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.dead_letter.requeued",
+        object_id: job.object_id,
+        message: `Dead letter job requeued: ${job.job_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        requeued: true,
+        job
       });
     }
 
