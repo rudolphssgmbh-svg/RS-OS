@@ -692,9 +692,10 @@ if (req.method === "POST" && path === "/runtime/execute") {
               AND lock_expires_at < NOW()
             )
           )
-          AND COALESCE(available_at, NOW()) <= NOW()
+          AND COALESCE(scheduled_for, available_at, NOW()) <= NOW()
         ORDER BY
           priority ASC,
+          COALESCE(scheduled_for, created_at) ASC,
           created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
