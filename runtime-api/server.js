@@ -1503,6 +1503,132 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // EXECUTE APPROVED RUNTIME RECOMMENDATION
+
+    if (req.method === "POST" && path.startsWith("/runtime/recommendations/execute/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const recommendation_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/execute/", "")
+      );
+
+      if (!recommendation_id) {
+        return send(res, 400, {
+          error: "missing_recommendation_id"
+        });
+      }
+
+      const recommendationResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND recommendation_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        recommendation_id
+      ]);
+
+      if (recommendationResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "recommendation_not_found",
+          recommendation_id
+        });
+      }
+
+      const recommendation = recommendationResult.rows[0];
+
+      if (recommendation.status !== "approved") {
+        return send(res, 409, {
+          error: "recommendation_not_approved",
+          recommendation_id,
+          current_status: recommendation.status
+        });
+      }
+
+      const job_id =
+        "job-" + Date.now();
+
+      const execution_type =
+        "recommendation." + recommendation.recommendation_type;
+
+      const requested_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      await db.query(`
+        INSERT INTO runtime_execution_jobs (
+          job_id,
+          tenant_id,
+          object_id,
+          status,
+          requested_by,
+          execution_type,
+          payload,
+          available_at,
+          priority,
+          workflow_id,
+          chain_position
+        )
+        VALUES ($1,$2,$3,'pending',$4,$5,$6,now(),$7,$8,0)
+      `, [
+        job_id,
+        tenant_id,
+        recommendation.object_id,
+        requested_by,
+        execution_type,
+        JSON.stringify({
+          recommendation_id,
+          recommendation_type: recommendation.recommendation_type,
+          reason: recommendation.reason,
+          evidence: recommendation.evidence
+        }),
+        recommendation.priority === "critical" ? 10 : 100,
+        job_id
+      ]);
+
+      const updateResult = await db.query(`
+        UPDATE runtime_recommendations
+        SET
+          status = 'executed',
+          executed_job_id = $1,
+          executed_at = now()
+        WHERE tenant_id = $2
+          AND recommendation_id = $3
+        RETURNING *
+      `, [
+        job_id,
+        tenant_id,
+        recommendation_id
+      ]);
+
+      const executedRecommendation = updateResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: executedRecommendation.object_id,
+        event_type: "runtime.recommendation.executed",
+        message: `Recommendation execution job created: ${execution_type}`
+      });
+
+      return send(res, 200, {
+        executed: true,
+        job_id,
+        execution_type,
+        recommendation: executedRecommendation
+      });
+    }
+
     // APPROVE RUNTIME RECOMMENDATION
 
     if (req.method === "POST" && path.startsWith("/runtime/recommendations/approve/")) {
