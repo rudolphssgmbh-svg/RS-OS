@@ -1475,6 +1475,82 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // GET RUNTIME RECOMMENDATIONS BY OBJECT
+
+    if (req.method === "GET" && path.startsWith("/runtime/recommendations/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const object_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          recommendation_id,
+          object_id,
+          recommendation_type,
+          priority,
+          status,
+          reason,
+          evidence,
+          created_by,
+          created_at,
+          approved_by,
+          approved_at,
+          executed_job_id,
+          executed_at
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY
+          CASE priority
+            WHEN 'critical' THEN 1
+            WHEN 'high' THEN 2
+            WHEN 'normal' THEN 3
+            WHEN 'low' THEN 4
+            ELSE 5
+          END,
+          created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const open_count = result.rows.filter(r => r.status === "open").length;
+      const approved_count = result.rows.filter(r => r.status === "approved").length;
+      const executed_count = result.rows.filter(r => r.status === "executed").length;
+      const rejected_count = result.rows.filter(r => r.status === "rejected").length;
+
+      return send(res, 200, {
+        object_id,
+        tenant_id,
+        recommendation_count: result.rows.length,
+        open_count,
+        approved_count,
+        executed_count,
+        rejected_count,
+        recommendations: result.rows
+      });
+    }
+
     // GET UNIFIED OBJECT TRACE
 
     if (req.method === "GET" && path.startsWith("/runtime/trace/")) {
