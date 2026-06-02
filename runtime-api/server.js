@@ -1416,53 +1416,114 @@ if (req.method === "POST" && path === "/runtime/execute") {
         latestApproval = approvalResult.rows[0] || null;
       }
 
+      const rulesResult = await db.query(`
+        SELECT
+          rule_id,
+          rule_name,
+          condition_definition,
+          recommendation_definition
+        FROM runtime_recommendation_rules
+        WHERE tenant_id = $1
+          AND enabled = true
+        ORDER BY rule_id ASC
+      `, [
+        tenant_id
+      ]);
+
       const recommendations = [];
 
       const riskScore = Number(object.risk_score || 0);
-
-      if (riskScore >= 40) {
-        recommendations.push({
-          recommendation_type: "RECHECK_GOVERNANCE",
-          priority: riskScore >= 70 ? "critical" : "high",
-          reason: `Object risk score is ${riskScore}; governance should be reviewed.`,
-          evidence: {
-            risk_score: riskScore,
-            runtime_type: object.runtime_type,
-            state: object.state
-          }
-        });
-      }
 
       const highOpenActions = actionsResult.rows.filter(action =>
         action.priority === "high" || action.priority === "critical"
       );
 
-      if (highOpenActions.length > 0) {
-        recommendations.push({
-          recommendation_type: "CLOSE_OPEN_ACTIONS",
-          priority: "high",
-          reason: `${highOpenActions.length} high priority open action(s) should be resolved.`,
-          evidence: {
-            open_action_count: actionsResult.rows.length,
-            high_open_action_count: highOpenActions.length
-          }
-        });
-      }
-
-      if (
+      const governanceReviewWithoutApproval =
         latestGovernance &&
         latestGovernance.governance_status === "review_required" &&
         !latestApproval
-      ) {
+          ? true
+          : false;
+
+      const context = {
+        risk_score: riskScore,
+        open_high_actions: highOpenActions.length,
+        governance_review_without_approval: governanceReviewWithoutApproval
+      };
+
+      function evaluateRecommendationRule(condition, context) {
+        const field = condition.field;
+        const operator = condition.operator;
+        const expected = condition.value;
+        const actual = context[field];
+
+        if (actual === undefined) {
+          return false;
+        }
+
+        if (operator === ">=") return Number(actual) >= Number(expected);
+        if (operator === ">") return Number(actual) > Number(expected);
+        if (operator === "<=") return Number(actual) <= Number(expected);
+        if (operator === "<") return Number(actual) < Number(expected);
+        if (operator === "=") return actual === expected;
+        if (operator === "!=") return actual !== expected;
+
+        return false;
+      }
+
+      for (const rule of rulesResult.rows) {
+        const condition = rule.condition_definition || {};
+        const definition = rule.recommendation_definition || {};
+
+        if (!evaluateRecommendationRule(condition, context)) {
+          continue;
+        }
+
+        const recommendation_type = definition.recommendation_type;
+        const priority = definition.priority || "normal";
+
+        let reason = `Rule matched: ${rule.rule_name}`;
+        let evidence = {
+          rule_id: rule.rule_id,
+          rule_name: rule.rule_name,
+          condition,
+          context
+        };
+
+        if (recommendation_type === "RECHECK_GOVERNANCE") {
+          reason = `Object risk score is ${riskScore}; governance should be reviewed.`;
+          evidence = {
+            ...evidence,
+            risk_score: riskScore,
+            runtime_type: object.runtime_type,
+            state: object.state
+          };
+        }
+
+        if (recommendation_type === "CLOSE_OPEN_ACTIONS") {
+          reason = `${highOpenActions.length} high priority open action(s) should be resolved.`;
+          evidence = {
+            ...evidence,
+            open_action_count: actionsResult.rows.length,
+            high_open_action_count: highOpenActions.length
+          };
+        }
+
+        if (recommendation_type === "REQUEST_APPROVAL") {
+          reason = "Latest governance decision requires review and has no approval.";
+          evidence = {
+            ...evidence,
+            decision_id: latestGovernance ? latestGovernance.decision_id : null,
+            governance_status: latestGovernance ? latestGovernance.governance_status : null,
+            reason_codes: latestGovernance ? latestGovernance.reason_codes : null
+          };
+        }
+
         recommendations.push({
-          recommendation_type: "REQUEST_APPROVAL",
-          priority: "high",
-          reason: "Latest governance decision requires review and has no approval.",
-          evidence: {
-            decision_id: latestGovernance.decision_id,
-            governance_status: latestGovernance.governance_status,
-            reason_codes: latestGovernance.reason_codes
-          }
+          recommendation_type,
+          priority,
+          reason,
+          evidence
         });
       }
 
