@@ -1293,6 +1293,188 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // GENERATE RUNTIME RECOMMENDATIONS BY OBJECT
+
+    if (req.method === "POST" && path.startsWith("/runtime/recommendations/generate/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const object_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/generate/", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const objectResult = await db.query(`
+        SELECT object_id, runtime_type, state, priority, risk_score
+        FROM runtime_objects
+        WHERE tenant_id = $1
+          AND object_id = $2
+        LIMIT 1
+      `, [tenant_id, object_id]);
+
+      if (objectResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "object_not_found",
+          object_id
+        });
+      }
+
+      const object = objectResult.rows[0];
+
+      const actionsResult = await db.query(`
+        SELECT *
+        FROM runtime_actions
+        WHERE tenant_id = $1
+          AND object_id = $2
+          AND status NOT IN ('completed', 'cancelled', 'rejected')
+        ORDER BY created_at DESC
+      `, [tenant_id, object_id]);
+
+      const governanceResult = await db.query(`
+        SELECT *
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [tenant_id, object_id]);
+
+      const latestGovernance = governanceResult.rows[0] || null;
+
+      let latestApproval = null;
+
+      if (latestGovernance) {
+        const approvalResult = await db.query(`
+          SELECT *
+          FROM runtime_governance_approvals
+          WHERE tenant_id = $1
+            AND decision_id = $2
+          ORDER BY created_at DESC
+          LIMIT 1
+        `, [tenant_id, latestGovernance.decision_id]);
+
+        latestApproval = approvalResult.rows[0] || null;
+      }
+
+      const recommendations = [];
+
+      const riskScore = Number(object.risk_score || 0);
+
+      if (riskScore >= 40) {
+        recommendations.push({
+          recommendation_type: "RECHECK_GOVERNANCE",
+          priority: riskScore >= 70 ? "critical" : "high",
+          reason: `Object risk score is ${riskScore}; governance should be reviewed.`,
+          evidence: {
+            risk_score: riskScore,
+            runtime_type: object.runtime_type,
+            state: object.state
+          }
+        });
+      }
+
+      const highOpenActions = actionsResult.rows.filter(action =>
+        action.priority === "high" || action.priority === "critical"
+      );
+
+      if (highOpenActions.length > 0) {
+        recommendations.push({
+          recommendation_type: "CLOSE_OPEN_ACTIONS",
+          priority: "high",
+          reason: `${highOpenActions.length} high priority open action(s) should be resolved.`,
+          evidence: {
+            open_action_count: actionsResult.rows.length,
+            high_open_action_count: highOpenActions.length
+          }
+        });
+      }
+
+      if (
+        latestGovernance &&
+        latestGovernance.governance_status === "review_required" &&
+        !latestApproval
+      ) {
+        recommendations.push({
+          recommendation_type: "REQUEST_APPROVAL",
+          priority: "high",
+          reason: "Latest governance decision requires review and has no approval.",
+          evidence: {
+            decision_id: latestGovernance.decision_id,
+            governance_status: latestGovernance.governance_status,
+            reason_codes: latestGovernance.reason_codes
+          }
+        });
+      }
+
+      const inserted = [];
+
+      for (const recommendation of recommendations) {
+        const recommendation_id =
+          "rec-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+        await db.query(`
+          INSERT INTO runtime_recommendations (
+            recommendation_id,
+            tenant_id,
+            object_id,
+            recommendation_type,
+            priority,
+            status,
+            reason,
+            evidence,
+            created_by
+          )
+          VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8)
+        `, [
+          recommendation_id,
+          tenant_id,
+          object_id,
+          recommendation.recommendation_type,
+          recommendation.priority,
+          recommendation.reason,
+          JSON.stringify(recommendation.evidence || {}),
+          auth.user.operator_id || auth.user.username || "runtime_admin"
+        ]);
+
+        inserted.push({
+          recommendation_id,
+          object_id,
+          status: "open",
+          ...recommendation
+        });
+      }
+
+      await writeEvent({
+        tenant_id,
+        object_id,
+        event_type: "runtime.recommendations.generated",
+        message: `Generated ${inserted.length} runtime recommendation(s)`
+      });
+
+      return send(res, 200, {
+        object_id,
+        tenant_id,
+        generated_count: inserted.length,
+        recommendations: inserted
+      });
+    }
+
     // GET UNIFIED OBJECT TRACE
 
     if (req.method === "GET" && path.startsWith("/runtime/trace/")) {
