@@ -1228,6 +1228,57 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
+    // GET AUDIT PATH BY OBJECT
+
+    if (req.method === "GET" && path.startsWith("/runtime/audit/path/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const object_id = decodeURIComponent(
+        path.replace("/runtime/audit/path/", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          event_id,
+          event_type,
+          object_id,
+          message,
+          audit_hash,
+          previous_hash,
+          created_at
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at ASC
+      `, [
+        auth.user.tenant_id,
+        object_id
+      ]);
+
+      return send(res, 200, {
+        object_id,
+        tenant_id: auth.user.tenant_id,
+        event_count: result.rows.length,
+        timeline: result.rows
+      });
+    }
+
+
     // GET RELATIONS
 
     if (req.method === "GET" && path === "/runtime/relations") {
