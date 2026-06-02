@@ -1423,8 +1423,32 @@ if (req.method === "POST" && path === "/runtime/execute") {
       }
 
       const inserted = [];
+      const skipped_duplicates = [];
 
       for (const recommendation of recommendations) {
+
+        const existingResult = await db.query(`
+          SELECT recommendation_id
+          FROM runtime_recommendations
+          WHERE tenant_id = $1
+            AND object_id = $2
+            AND recommendation_type = $3
+            AND status = 'open'
+          LIMIT 1
+        `, [
+          tenant_id,
+          object_id,
+          recommendation.recommendation_type
+        ]);
+
+        if (existingResult.rows.length > 0) {
+          skipped_duplicates.push({
+            recommendation_type: recommendation.recommendation_type,
+            existing_recommendation_id: existingResult.rows[0].recommendation_id
+          });
+          continue;
+        }
+
         const recommendation_id =
           "rec-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
 
@@ -1471,7 +1495,9 @@ if (req.method === "POST" && path === "/runtime/execute") {
         object_id,
         tenant_id,
         generated_count: inserted.length,
-        recommendations: inserted
+        skipped_duplicate_count: skipped_duplicates.length,
+        recommendations: inserted,
+        skipped_duplicates
       });
     }
 
