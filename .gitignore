@@ -4,3 +4,13 @@ node_modules/
 *.backup.*
 runtime-api.backup.*
 frontend.backup.*
+
+# Runtime local/generated data
+storage/
+backups/
+logs/
+exports/
+runtime-api/.env
+runtime-api/server.before-*
+runtime-api/server.js.bak
+runtime-api/server.js.save.*
