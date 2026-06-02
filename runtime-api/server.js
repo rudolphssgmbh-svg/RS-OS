@@ -1230,6 +1230,80 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // GET EXECUTION PATH BY OBJECT
+
+    if (req.method === "GET" && path.startsWith("/runtime/execution/path/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const object_id = decodeURIComponent(
+        path.replace("/runtime/execution/path/", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          job_id,
+          object_id,
+          action,
+          status,
+          requested_by,
+          result_message,
+          execution_type,
+          payload,
+          worker_id,
+          retry_count,
+          last_error,
+          failed_at,
+          scheduled_for,
+          available_at,
+          started_at,
+          completed_at,
+          created_at,
+          workflow_id,
+          parent_job_id,
+          next_execution_type,
+          chain_position
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at ASC
+      `, [
+        auth.user.tenant_id,
+        object_id
+      ]);
+
+      const executions = result.rows;
+
+      const latestExecution =
+        executions.length > 0
+          ? executions[executions.length - 1]
+          : null;
+
+      return send(res, 200, {
+        object_id,
+        tenant_id: auth.user.tenant_id,
+        job_count: executions.length,
+        latest_status: latestExecution ? latestExecution.status : null,
+        latest_execution_type: latestExecution ? latestExecution.execution_type : null,
+        latest_worker_id: latestExecution ? latestExecution.worker_id : null,
+        executions
+      });
+    }
+
     // GET GOVERNANCE PATH BY OBJECT
 
     if (req.method === "GET" && path.startsWith("/runtime/governance/path/")) {
