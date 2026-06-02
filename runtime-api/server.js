@@ -1229,6 +1229,103 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // GET GOVERNANCE PATH BY OBJECT
+
+    if (req.method === "GET" && path.startsWith("/runtime/governance/path/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const object_id = decodeURIComponent(
+        path.replace("/runtime/governance/path/", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const decisionsResult = await db.query(`
+        SELECT
+          decision_id,
+          object_id,
+          governance_status,
+          reason_codes,
+          risk_count,
+          max_risk_score,
+          acute_risk_count,
+          open_action_count,
+          high_open_action_count,
+          graph_edge_count,
+          audit_event_count,
+          created_at
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at ASC
+      `, [
+        auth.user.tenant_id,
+        object_id
+      ]);
+
+      const decisionIds = decisionsResult.rows.map(d => d.decision_id);
+
+      let approvals = [];
+
+      if (decisionIds.length > 0) {
+        const approvalsResult = await db.query(`
+          SELECT
+            approval_id,
+            decision_id,
+            object_id,
+            approval_status,
+            reason,
+            requested_by,
+            decided_by,
+            created_at
+          FROM runtime_governance_approvals
+          WHERE tenant_id = $1
+            AND decision_id = ANY($2)
+          ORDER BY created_at ASC
+        `, [
+          auth.user.tenant_id,
+          decisionIds
+        ]);
+
+        approvals = approvalsResult.rows;
+      }
+
+      const latestDecision =
+        decisionsResult.rows.length > 0
+          ? decisionsResult.rows[decisionsResult.rows.length - 1]
+          : null;
+
+      const latestApproval =
+        approvals.length > 0
+          ? approvals[approvals.length - 1]
+          : null;
+
+      return send(res, 200, {
+        object_id,
+        tenant_id: auth.user.tenant_id,
+        decision_count: decisionsResult.rows.length,
+        approval_count: approvals.length,
+        latest_status: latestDecision ? latestDecision.governance_status : null,
+        latest_approval_status: latestApproval ? latestApproval.approval_status : null,
+        decisions: decisionsResult.rows,
+        approvals
+      });
+    }
+
     // GET AUDIT PATH BY OBJECT
 
     if (req.method === "GET" && path.startsWith("/runtime/audit/path/")) {
