@@ -1294,6 +1294,50 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
+    // GET RUNTIME RECOMMENDATION RULES
+
+    if (req.method === "GET" && path === "/runtime/recommendation-rules") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const result = await db.query(`
+        SELECT
+          rule_id,
+          tenant_id,
+          rule_name,
+          enabled,
+          condition_definition,
+          recommendation_definition,
+          created_by,
+          created_at,
+          updated_by,
+          updated_at
+        FROM runtime_recommendation_rules
+        WHERE tenant_id = $1
+        ORDER BY enabled DESC, rule_id ASC
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const enabled_count = result.rows.filter(rule => rule.enabled === true).length;
+
+      return send(res, 200, {
+        tenant_id: auth.user.tenant_id,
+        rule_count: result.rows.length,
+        enabled_count,
+        rules: result.rows
+      });
+    }
+
     // GENERATE RUNTIME RECOMMENDATIONS BY OBJECT
 
     if (req.method === "POST" && path.startsWith("/runtime/recommendations/generate/")) {
