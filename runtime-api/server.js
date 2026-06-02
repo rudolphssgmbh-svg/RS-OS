@@ -1231,6 +1231,109 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // GET UNIFIED OBJECT TRACE
+
+    if (req.method === "GET" && path.startsWith("/runtime/trace/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const object_id = decodeURIComponent(
+        path.replace("/runtime/trace/", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const objectResult = await db.query(`
+        SELECT object_id, runtime_type, state, priority, risk_score, created_at
+        FROM runtime_objects
+        WHERE tenant_id = $1
+          AND object_id = $2
+        LIMIT 1
+      `, [auth.user.tenant_id, object_id]);
+
+      const auditResult = await db.query(`
+        SELECT COUNT(*)::int AS event_count
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+      `, [auth.user.tenant_id, object_id]);
+
+      const governanceResult = await db.query(`
+        SELECT governance_status, created_at
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [auth.user.tenant_id, object_id]);
+
+      const executionResult = await db.query(`
+        SELECT status, execution_type, worker_id, created_at, completed_at
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [auth.user.tenant_id, object_id]);
+
+      const relationResult = await db.query(`
+        SELECT relation_id, source_object_id, target_object_id, relation_type, created_at
+        FROM runtime_relations
+        WHERE tenant_id = $1
+          AND (
+            source_object_id = $2
+            OR target_object_id = $2
+          )
+        ORDER BY created_at DESC
+      `, [auth.user.tenant_id, object_id]);
+
+      const latestGovernance =
+        governanceResult.rows.length > 0
+          ? governanceResult.rows[0]
+          : null;
+
+      const latestExecution =
+        executionResult.rows.length > 0
+          ? executionResult.rows[0]
+          : null;
+
+      return send(res, 200, {
+        object_id,
+        tenant_id: auth.user.tenant_id,
+        exists_in_runtime_objects: objectResult.rows.length > 0,
+        runtime_object: objectResult.rows[0] || null,
+        audit: {
+          event_count: auditResult.rows[0].event_count
+        },
+        governance: {
+          decision_count: governanceResult.rows.length,
+          latest_status: latestGovernance ? latestGovernance.governance_status : null,
+          latest_created_at: latestGovernance ? latestGovernance.created_at : null
+        },
+        execution: {
+          job_count: executionResult.rows.length,
+          latest_status: latestExecution ? latestExecution.status : null,
+          latest_execution_type: latestExecution ? latestExecution.execution_type : null,
+          latest_worker_id: latestExecution ? latestExecution.worker_id : null
+        },
+        graph: {
+          relation_count: relationResult.rows.length,
+          relations: relationResult.rows
+        }
+      });
+    }
+
     // GET EXECUTION PATH BY OBJECT
 
     if (req.method === "GET" && path.startsWith("/runtime/execution/path/")) {
