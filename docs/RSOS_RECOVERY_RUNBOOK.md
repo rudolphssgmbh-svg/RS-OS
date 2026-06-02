@@ -62,3 +62,36 @@ Run on a clean or recovery server:
 3. Compose ownership migration
 4. Disaster recovery validation
 5. RS OS deployment pipeline
+## Verified Backup and Restore Validation
+
+### Backup Procedure
+
+```bash
+cd /opt/rsos
+
+sudo mkdir -p backups/postgres
+
+BACKUP_FILE="backups/postgres/rsos_runtime_$(date +%Y%m%d_%H%M%S).sql"
+
+sudo docker exec rsos-postgres \
+  pg_dump -U rsos -d rsos_runtime > "$BACKUP_FILE"
+```
+
+### Restore Validation Procedure
+
+```bash
+sudo docker exec rsos-postgres createdb -U rsos rsos_restore_test
+
+cat "$BACKUP_FILE" | \
+sudo docker exec -i rsos-postgres \
+psql -U rsos -d rsos_restore_test
+```
+
+### Validation Results
+
+Verified successfully on 2026-06-02:
+
+* runtime_events = 167
+* runtime_objects = 5
+
+Backup and restore process confirmed operational.
