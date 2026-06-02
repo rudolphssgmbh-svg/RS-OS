@@ -1502,6 +1502,93 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
+    // APPROVE RUNTIME RECOMMENDATION
+
+    if (req.method === "POST" && path.startsWith("/runtime/recommendations/approve/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const recommendation_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/approve/", "")
+      );
+
+      if (!recommendation_id) {
+        return send(res, 400, {
+          error: "missing_recommendation_id"
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND recommendation_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        recommendation_id
+      ]);
+
+      if (existingResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "recommendation_not_found",
+          recommendation_id
+        });
+      }
+
+      const recommendation = existingResult.rows[0];
+
+      if (recommendation.status !== "open") {
+        return send(res, 409, {
+          error: "recommendation_not_open",
+          recommendation_id,
+          current_status: recommendation.status
+        });
+      }
+
+      const approved_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const updateResult = await db.query(`
+        UPDATE runtime_recommendations
+        SET
+          status = 'approved',
+          approved_by = $1,
+          approved_at = now()
+        WHERE tenant_id = $2
+          AND recommendation_id = $3
+        RETURNING *
+      `, [
+        approved_by,
+        tenant_id,
+        recommendation_id
+      ]);
+
+      const approvedRecommendation = updateResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: approvedRecommendation.object_id,
+        event_type: "runtime.recommendation.approved",
+        message: `Recommendation approved: ${approvedRecommendation.recommendation_type}`
+      });
+
+      return send(res, 200, {
+        approved: true,
+        recommendation: approvedRecommendation
+      });
+    }
+
     // GET RUNTIME RECOMMENDATIONS BY OBJECT
 
     if (req.method === "GET" && path.startsWith("/runtime/recommendations/")) {
