@@ -1856,6 +1856,29 @@ if (req.method === "POST" && path === "/runtime/execute") {
         ORDER BY created_at DESC
       `, [auth.user.tenant_id, object_id]);
 
+      const recommendationResult = await db.query(`
+        SELECT
+          recommendation_id,
+          recommendation_type,
+          priority,
+          status,
+          reason,
+          created_at,
+          approved_by,
+          approved_at,
+          executed_job_id,
+          executed_at
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [auth.user.tenant_id, object_id]);
+
+      const latestRecommendation =
+        recommendationResult.rows.length > 0
+          ? recommendationResult.rows[0]
+          : null;
+
       const latestGovernance =
         governanceResult.rows.length > 0
           ? governanceResult.rows[0]
@@ -1888,6 +1911,17 @@ if (req.method === "POST" && path === "/runtime/execute") {
         graph: {
           relation_count: relationResult.rows.length,
           relations: relationResult.rows
+        },
+        recommendations: {
+          recommendation_count: recommendationResult.rows.length,
+          open_count: recommendationResult.rows.filter(r => r.status === "open").length,
+          approved_count: recommendationResult.rows.filter(r => r.status === "approved").length,
+          executed_count: recommendationResult.rows.filter(r => r.status === "executed").length,
+          rejected_count: recommendationResult.rows.filter(r => r.status === "rejected").length,
+          latest_recommendation_type: latestRecommendation ? latestRecommendation.recommendation_type : null,
+          latest_status: latestRecommendation ? latestRecommendation.status : null,
+          latest_recommendation_id: latestRecommendation ? latestRecommendation.recommendation_id : null,
+          recommendations: recommendationResult.rows
         }
       });
     }
