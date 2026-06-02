@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const fs = require("fs");
+//require('dotenv').config();
 const http = require("http");
 const { Client } = require("pg");
 const jwt = require("jsonwebtoken");
@@ -13,11 +14,11 @@ const ROOT_PUBLIC_KEY = "DEV_MODE";
 const JWT_SECRET = process.env.JWT_SECRET || "RSOS_SECURE_RUNTIME_2026";
 
 const db = new Client({
-  host: "rsos-postgres",
+  host: process.env.DB_HOST || "rsos-postgres",
   port: 5432,
-  user: "rsos",
-  password: "rsos_secure_2026",
-  database: "rsos_runtime"
+  user: process.env.DB_USER || "rsos",
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME || "rsos_runtime"
 });
 
 async function initDb() {
@@ -287,28 +288,28 @@ const server = http.createServer(async (req, res) => {
         {
           operator_id: "janette",
           username: "janette",
-          password: "rsos2026",
+          password: process.env.RUNTIME_ADMIN_PASSWORD,
           role: "runtime_admin",
           tenant_id: "tenant-rudolph"
         },
         {
           operator_id: "qm_operator",
           username: "qm",
-          password: "qm2026",
+          password: process.env.QM_PASSWORD,
           role: "qm",
           tenant_id: "tenant-rudolph"
         },
         {
           operator_id: "finance_operator",
           username: "finance",
-          password: "finance2026",
+          password: process.env.FINANCE_PASSWORD,
           role: "finance",
           tenant_id: "tenant-rudolph"
         },
         {
           operator_id: "auditor",
           username: "auditor",
-          password: "audit2026",
+          password: process.env.AUDIT_PASSWORD,
           role: "auditor",
           tenant_id: "tenant-rudolph"
         }
@@ -354,6 +355,493 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    // GOVERNANCE CHECK
+
+    if (req.method === "POST" && path === "/governance/check") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+      const body = await readBody(req);
+      const object_id = body.object_id;
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const objectResult = await db.query(`
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+          AND object_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      if (objectResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "object_not_found",
+          object_id
+        });
+      }
+
+      const object = objectResult.rows[0];
+
+      const risksResult = await db.query(`
+        SELECT *
+        FROM runtime_risks
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY risk_score DESC, created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const actionsResult = await db.query(`
+        SELECT *
+        FROM runtime_actions
+        WHERE tenant_id = $1
+          AND object_id = $2
+          AND status NOT IN ('completed', 'cancelled', 'rejected')
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const relationsResult = await db.query(`
+        SELECT *
+        FROM runtime_relations
+        WHERE tenant_id = $1
+          AND (
+            source_object_id = $2
+            OR target_object_id = $2
+          )
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const eventResult = await db.query(`
+        SELECT COUNT(*)::int AS event_count
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const objectRiskScore = Number(object.risk_score || 0);
+
+      const maxRiskScore = risksResult.rows.reduce((max, risk) => {
+        return Math.max(max, Number(risk.risk_score || 0));
+      }, objectRiskScore);
+
+      const hasAcuteRisk = risksResult.rows.some(risk =>
+        risk.risk_state === "acute"
+      );
+
+      const highOpenActions = actionsResult.rows.filter(action =>
+        action.priority === "high" || action.priority === "critical"
+      );
+
+      const reason_codes = [];
+
+      let governance_status = "allow";
+
+      if (maxRiskScore >= 70 || hasAcuteRisk) {
+        governance_status = "blocked";
+        reason_codes.push("HIGH_OR_ACUTE_RISK");
+      } else if (maxRiskScore >= 40) {
+        governance_status = "review_required";
+        reason_codes.push("ELEVATED_RISK_SCORE");
+      }
+
+      if (highOpenActions.length > 0 && governance_status !== "blocked") {
+        governance_status = "review_required";
+        reason_codes.push("OPEN_HIGH_PRIORITY_ACTIONS");
+      }
+
+      if (reason_codes.length === 0) {
+        reason_codes.push("NO_GOVERNANCE_BLOCKER_FOUND");
+      }
+
+      const governanceResponse = {
+        object_id,
+        tenant_id,
+        governance_status,
+        reason_codes,
+        object: {
+          runtime_type: object.runtime_type,
+          state: object.state,
+          priority: object.priority,
+          risk_score: objectRiskScore
+        },
+        risk_summary: {
+          risk_count: risksResult.rows.length,
+          max_risk_score: maxRiskScore,
+          acute_risk_count: risksResult.rows.filter(r => r.risk_state === "acute").length
+        },
+        action_summary: {
+          open_action_count: actionsResult.rows.length,
+          high_open_action_count: highOpenActions.length
+        },
+        graph_summary: {
+          direct_edge_count: relationsResult.rows.length
+        },
+        audit_summary: {
+          event_count: eventResult.rows[0].event_count
+        }
+      };
+
+      const decision_id =
+        `gov-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      await db.query(`
+        INSERT INTO runtime_governance_decisions
+        (
+          decision_id,
+          object_id,
+          tenant_id,
+          governance_status,
+          reason_codes,
+          risk_count,
+          max_risk_score,
+          acute_risk_count,
+          open_action_count,
+          high_open_action_count,
+          graph_edge_count,
+          audit_event_count
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      `, [
+        decision_id,
+        object_id,
+        tenant_id,
+        governance_status,
+        JSON.stringify(reason_codes),
+        governanceResponse.risk_summary.risk_count,
+        governanceResponse.risk_summary.max_risk_score,
+        governanceResponse.risk_summary.acute_risk_count,
+        governanceResponse.action_summary.open_action_count,
+        governanceResponse.action_summary.high_open_action_count,
+        governanceResponse.graph_summary.direct_edge_count,
+        governanceResponse.audit_summary.event_count
+      ]);
+
+      governanceResponse.decision_id = decision_id;
+
+      await writeEvent({
+        event_type: "runtime.governance.checked",
+        object_id,
+        message: `Governance check result: ${governance_status}`,
+        tenant_id
+      });
+
+      return send(res, 200, governanceResponse);
+    }
+
+
+    // GOVERNANCE DASHBOARD
+
+    if (req.method === "GET" && path === "/governance/dashboard") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const decisionsResult = await db.query(`
+        SELECT *
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 50
+      `, [tenant_id]);
+
+      const totalResult = await db.query(`
+        SELECT COUNT(*)::int AS total_checks
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      const statusResult = await db.query(`
+        SELECT governance_status, COUNT(*)::int AS count
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+        GROUP BY governance_status
+      `, [tenant_id]);
+
+      const status_counts = {};
+
+      for (const row of statusResult.rows) {
+        status_counts[row.governance_status] = row.count;
+      }
+
+      const latest_checks = decisionsResult.rows.map(decision => ({
+        decision_id: decision.decision_id,
+        object_id: decision.object_id,
+        tenant_id: decision.tenant_id,
+        governance_status: decision.governance_status,
+        reason_codes: decision.reason_codes || [],
+        risk_summary: {
+          risk_count: decision.risk_count,
+          max_risk_score: decision.max_risk_score,
+          acute_risk_count: decision.acute_risk_count
+        },
+        action_summary: {
+          open_action_count: decision.open_action_count,
+          high_open_action_count: decision.high_open_action_count
+        },
+        graph_summary: {
+          direct_edge_count: decision.graph_edge_count
+        },
+        audit_summary: {
+          event_count: decision.audit_event_count
+        },
+        created_at: decision.created_at
+      }));
+
+      return send(res, 200, {
+        tenant_id,
+        total_checks: totalResult.rows[0].total_checks,
+        status_counts,
+        latest_checks
+      });
+    }
+
+
+    // GOVERNANCE GATES DASHBOARD
+
+    if (req.method === "GET" && path === "/governance/gates/dashboard") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const eventsResult = await db.query(`
+        SELECT *
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND event_type LIKE 'runtime.governance.gate.%'
+        ORDER BY created_at DESC
+        LIMIT 50
+      `, [tenant_id]);
+
+      const statusResult = await db.query(`
+        SELECT event_type, COUNT(*)::int AS count
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND event_type LIKE 'runtime.governance.gate.%'
+        GROUP BY event_type
+      `, [tenant_id]);
+
+      const gate_counts = {
+        allowed: 0,
+        review_required: 0,
+        blocked: 0
+      };
+
+      for (const row of statusResult.rows) {
+        if (row.event_type === "runtime.governance.gate.allowed") {
+          gate_counts.allowed = row.count;
+        }
+        if (row.event_type === "runtime.governance.gate.review_required") {
+          gate_counts.review_required = row.count;
+        }
+        if (row.event_type === "runtime.governance.gate.blocked") {
+          gate_counts.blocked = row.count;
+        }
+      }
+
+      return send(res, 200, {
+        tenant_id,
+        gate_counts,
+        total_gate_events:
+          gate_counts.allowed +
+          gate_counts.review_required +
+          gate_counts.blocked,
+        latest_gate_events: eventsResult.rows
+      });
+    }
+
+
+    // GOVERNANCE APPROVALS CREATE
+
+    if (req.method === "POST" && path === "/governance/approvals") {
+
+      const auth = requireRole(req, [
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+      const body = await readBody(req);
+
+      const decision_id = body.decision_id;
+      const approval_status = body.approval_status;
+      const reason = body.reason || null;
+
+      if (!decision_id) {
+        return send(res, 400, {
+          error: "missing_decision_id"
+        });
+      }
+
+      if (!["approved", "rejected"].includes(approval_status)) {
+        return send(res, 400, {
+          error: "invalid_approval_status"
+        });
+      }
+
+      const decisionResult = await db.query(`
+        SELECT *
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND decision_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        decision_id
+      ]);
+
+      if (decisionResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "decision_not_found",
+          decision_id
+        });
+      }
+
+      const decision = decisionResult.rows[0];
+
+      const existingApprovalResult = await db.query(`
+        SELECT *
+        FROM runtime_governance_approvals
+        WHERE tenant_id = $1
+          AND decision_id = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [
+        tenant_id,
+        decision_id
+      ]);
+
+      if (existingApprovalResult.rows.length > 0) {
+        return send(res, 409, {
+          error: "approval_already_exists",
+          decision_id,
+          existing_approval: existingApprovalResult.rows[0]
+        });
+      }
+
+      const approval_id =
+        `app-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      await db.query(`
+        INSERT INTO runtime_governance_approvals
+        (
+          approval_id,
+          decision_id,
+          object_id,
+          tenant_id,
+          approval_status,
+          reason,
+          requested_by,
+          decided_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `, [
+        approval_id,
+        decision_id,
+        decision.object_id,
+        tenant_id,
+        approval_status,
+        reason,
+        decision.object_id,
+        auth.user.operator_id || auth.user.username || "runtime_admin"
+      ]);
+
+      await writeEvent({
+        event_type: `runtime.governance.approval.${approval_status}`,
+        object_id: decision.object_id,
+        message: `Governance approval ${approval_status}`,
+        tenant_id
+      });
+
+      return send(res, 201, {
+        created: true,
+        approval: {
+          approval_id,
+          decision_id,
+          object_id: decision.object_id,
+          tenant_id,
+          approval_status,
+          reason
+        }
+      });
+    }
+
+    // GOVERNANCE APPROVALS LIST
+
+    if (req.method === "GET" && path === "/governance/approvals") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_governance_approvals
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        tenant_id,
+        count: result.rows.length,
+        approvals: result.rows
+      });
+    }
+
     // CREATE OBJECT
 
     if (req.method === "POST" && path === "/runtime/objects") {
@@ -363,9 +851,7 @@ const server = http.createServer(async (req, res) => {
       ]);
 
       if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      const tenant_id = auth.user.tenant_id;
-      }
+        return send(res, auth.code, auth.response);      }
 
       const authUser = auth.user;
       const tenant_id = authUser.tenant_id;
@@ -439,13 +925,7 @@ const server = http.createServer(async (req, res) => {
         }
       });
 
-    }
-// CREATE OBJECT
-if (req.method === "POST" && path === "/runtime/objects") {
-
-
-    }
-// EXECUTION LAYER
+    }// EXECUTION LAYER
 if (req.method === "POST" && path === "/runtime/execute") {
 
   const executeAuth = requireRole(req, [
@@ -468,6 +948,188 @@ if (req.method === "POST" && path === "/runtime/execute") {
   const next_execution_type = body.next_execution_type || null;
   const workflow_id = body.workflow_id || job_id;
   const chain_position = Number(body.chain_position || 0);
+
+  const dag = payload.dag || {};
+  const edges = Array.isArray(dag.edges) ? dag.edges : [];
+
+  const graph = {};
+
+  for (const edge of edges) {
+    const from = edge.from;
+    const targets = Array.isArray(edge.to) ? edge.to : [edge.to];
+
+    if (!from) {
+      continue;
+    }
+
+    graph[from] = graph[from] || [];
+
+    for (const target of targets) {
+      if (target) {
+        graph[from].push(target);
+      }
+    }
+  }
+
+  const visiting = new Set();
+  const visited = new Set();
+
+  function hasCycle(node) {
+    if (visiting.has(node)) {
+      return true;
+    }
+
+    if (visited.has(node)) {
+      return false;
+    }
+
+    visiting.add(node);
+
+    for (const next of graph[node] || []) {
+      if (hasCycle(next)) {
+        return true;
+      }
+    }
+
+    visiting.delete(node);
+    visited.add(node);
+
+    return false;
+  }
+
+  for (const node of Object.keys(graph)) {
+    if (hasCycle(node)) {
+      return send(res, 400, {
+        error: "dag_cycle_detected",
+        node
+      });
+    }
+  }
+
+  if (!object_id) {
+    return send(res, 400, {
+      error: "missing_object_id"
+    });
+  }
+
+  const latestGovernanceResult = await db.query(`
+    SELECT *
+    FROM runtime_governance_decisions
+    WHERE tenant_id = $1
+      AND object_id = $2
+    ORDER BY created_at DESC
+    LIMIT 1
+  `, [
+    tenant_id,
+    object_id
+  ]);
+
+  const latestGovernanceDecision =
+    latestGovernanceResult.rows[0] || null;
+
+  if (!latestGovernanceDecision) {
+    await writeEvent({
+      event_type: "runtime.governance.gate.review_required",
+      object_id,
+      message: "Execution gate requires governance check before execution",
+      tenant_id
+    });
+
+    return send(res, 403, {
+      error: "governance_decision_required",
+      gate_status: "review_required",
+      object_id,
+      tenant_id
+    });
+  }
+
+  if (latestGovernanceDecision.governance_status === "blocked") {
+    await writeEvent({
+      event_type: "runtime.governance.gate.blocked",
+      object_id,
+      message: "Execution blocked by governance gate",
+      tenant_id
+    });
+
+    return send(res, 403, {
+      error: "execution_blocked_by_governance",
+      gate_status: "blocked",
+      governance_status: latestGovernanceDecision.governance_status,
+      decision_id: latestGovernanceDecision.decision_id,
+      object_id,
+      tenant_id
+    });
+  }
+
+  if (latestGovernanceDecision.governance_status === "review_required") {
+    const approvalResult = await db.query(`
+      SELECT *
+      FROM runtime_governance_approvals
+      WHERE tenant_id = $1
+        AND decision_id = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [
+      tenant_id,
+      latestGovernanceDecision.decision_id
+    ]);
+
+    const approval = approvalResult.rows[0] || null;
+
+    if (!approval) {
+      await writeEvent({
+        event_type: "runtime.governance.gate.review_required",
+        object_id,
+        message: "Execution requires review before governance gate allows execution",
+        tenant_id
+      });
+
+      return send(res, 403, {
+        error: "execution_requires_governance_review",
+        gate_status: "review_required",
+        governance_status: latestGovernanceDecision.governance_status,
+        decision_id: latestGovernanceDecision.decision_id,
+        object_id,
+        tenant_id
+      });
+    }
+
+    if (approval.approval_status === "rejected") {
+      await writeEvent({
+        event_type: "runtime.governance.gate.blocked",
+        object_id,
+        message: "Execution rejected by governance approval",
+        tenant_id
+      });
+
+      return send(res, 403, {
+        error: "execution_rejected_by_governance_approval",
+        gate_status: "blocked",
+        governance_status: latestGovernanceDecision.governance_status,
+        approval_status: approval.approval_status,
+        decision_id: latestGovernanceDecision.decision_id,
+        approval_id: approval.approval_id,
+        object_id,
+        tenant_id
+      });
+    }
+
+    if (approval.approval_status === "approved") {
+      await writeEvent({
+        event_type: "runtime.governance.gate.allowed",
+        object_id,
+        message: "Execution allowed by governance approval",
+        tenant_id
+      });
+    }
+  }
+
+  await writeEvent({
+    event_type: "runtime.governance.gate.allowed",
+    object_id,
+    message: "Execution allowed by governance gate",
+    tenant_id
+  });
 
   await db.query(`
     INSERT INTO runtime_execution_jobs
@@ -521,7 +1183,6 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       if (!auth.allowed) {
         return send(res, auth.code, auth.response);
-      const tenant_id = auth.user.tenant_id;
       }
 
       //onst tenant_id = auth.user.tenant_id;
@@ -550,7 +1211,6 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       if (!auth.allowed) {
         return send(res, auth.code, auth.response);
-      const tenant_id = auth.user.tenant_id;
       }
 
 
@@ -567,6 +1227,300 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // GET RELATIONS
+
+    if (req.method === "GET" && path === "/runtime/relations") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_relations
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+      `, [auth.user.tenant_id]);
+
+      return send(res, 200, {
+        count: result.rows.length,
+        relations: result.rows
+      });
+    }
+
+    // GET RELATIONS BY OBJECT
+
+    if (req.method === "GET" && path.startsWith("/runtime/relations/object/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const object_id = decodeURIComponent(
+        path.replace("/runtime/relations/object/", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_relations
+        WHERE tenant_id = $1
+          AND (
+            source_object_id = $2
+            OR target_object_id = $2
+          )
+        ORDER BY created_at DESC
+      `, [
+        auth.user.tenant_id,
+        object_id
+      ]);
+
+      return send(res, 200, {
+        object_id,
+        count: result.rows.length,
+        relations: result.rows
+      });
+    }
+
+
+    // GET RUNTIME GRAPH DEPTH BY OBJECT
+
+    if (req.method === "GET" && path.startsWith("/runtime/graph/depth/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const root_object_id = decodeURIComponent(
+        path.replace("/runtime/graph/depth/", "")
+      );
+
+      if (!root_object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const max_depth = Math.min(
+        Math.max(Number(urlObj.searchParams.get("depth") || 3), 1),
+        5
+      );
+
+      const visited = new Set();
+      const frontier = new Set([root_object_id]);
+      const allNodeIds = new Set([root_object_id]);
+      const edgeMap = new Map();
+
+      for (let depth = 0; depth < max_depth; depth++) {
+
+        const current = Array.from(frontier)
+          .filter(id => !visited.has(id));
+
+        if (current.length === 0) {
+          break;
+        }
+
+        for (const id of current) {
+          visited.add(id);
+        }
+
+        const relationsResult = await db.query(`
+          SELECT *
+          FROM runtime_relations
+          WHERE tenant_id = $1
+            AND (
+              source_object_id = ANY($2)
+              OR target_object_id = ANY($2)
+            )
+          ORDER BY created_at DESC
+        `, [
+          auth.user.tenant_id,
+          current
+        ]);
+
+        frontier.clear();
+
+        for (const relation of relationsResult.rows) {
+          edgeMap.set(relation.relation_id, relation);
+
+          if (!visited.has(relation.source_object_id)) {
+            frontier.add(relation.source_object_id);
+          }
+
+          if (!visited.has(relation.target_object_id)) {
+            frontier.add(relation.target_object_id);
+          }
+
+          allNodeIds.add(relation.source_object_id);
+          allNodeIds.add(relation.target_object_id);
+        }
+      }
+
+      const nodesResult = await db.query(`
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+          AND object_id = ANY($2)
+      `, [
+        auth.user.tenant_id,
+        Array.from(allNodeIds)
+      ]);
+
+      const objectMap = new Map();
+
+      for (const object of nodesResult.rows) {
+        objectMap.set(object.object_id, object);
+      }
+
+      const nodes = Array.from(allNodeIds).map(id => {
+        const object = objectMap.get(id);
+
+        return {
+          object_id: id,
+          exists_in_runtime_objects: !!object,
+          runtime_type: object ? object.runtime_type : null,
+          state: object ? object.state : null,
+          priority: object ? object.priority : null,
+          risk_score: object ? object.risk_score : null,
+          tenant_id: auth.user.tenant_id
+        };
+      });
+
+      const edges = Array.from(edgeMap.values()).map(relation => ({
+        relation_id: relation.relation_id,
+        source_object_id: relation.source_object_id,
+        target_object_id: relation.target_object_id,
+        relation_type: relation.relation_type,
+        tenant_id: relation.tenant_id,
+        created_at: relation.created_at
+      }));
+
+      return send(res, 200, {
+        root_object_id,
+        max_depth,
+        node_count: nodes.length,
+        edge_count: edges.length,
+        nodes,
+        edges
+      });
+    }
+
+
+    // GET RUNTIME GRAPH BY OBJECT
+
+    if (req.method === "GET" && path.startsWith("/runtime/graph/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const object_id = decodeURIComponent(
+        path.replace("/runtime/graph/", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const relationsResult = await db.query(`
+        SELECT *
+        FROM runtime_relations
+        WHERE tenant_id = $1
+          AND (
+            source_object_id = $2
+            OR target_object_id = $2
+          )
+        ORDER BY created_at DESC
+      `, [
+        auth.user.tenant_id,
+        object_id
+      ]);
+
+      const relations = relationsResult.rows;
+
+      const nodeIds = new Set();
+      nodeIds.add(object_id);
+
+      for (const relation of relations) {
+        nodeIds.add(relation.source_object_id);
+        nodeIds.add(relation.target_object_id);
+      }
+
+      const nodesResult = await db.query(`
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+          AND object_id = ANY($2)
+      `, [
+        auth.user.tenant_id,
+        Array.from(nodeIds)
+      ]);
+
+      const objectMap = new Map();
+
+      for (const object of nodesResult.rows) {
+        objectMap.set(object.object_id, object);
+      }
+
+      const nodes = Array.from(nodeIds).map(id => {
+        const object = objectMap.get(id);
+
+        return {
+          object_id: id,
+          object_type: object ? object.object_type : null,
+          object_name: object ? object.object_name : null,
+          exists_in_runtime_objects: !!object
+        };
+      });
+
+      const edges = relations.map(relation => ({
+        relation_id: relation.relation_id,
+        from: relation.source_object_id,
+        to: relation.target_object_id,
+        relation_type: relation.relation_type,
+        created_at: relation.created_at
+      }));
+
+      return send(res, 200, {
+        root: object_id,
+        tenant_id: auth.user.tenant_id,
+        node_count: nodes.length,
+        edge_count: edges.length,
+        nodes,
+        edges
+      });
+    }
+
+
     // DASHBOARD
 
     if (req.method === "GET" && path === "/runtime/dashboard") {
@@ -578,7 +1532,6 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       if (!auth.allowed) {
         return send(res, auth.code, auth.response);
-      const tenant_id = auth.user.tenant_id;
       }
 
 
@@ -629,7 +1582,6 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       if (!auth.allowed) {
         return send(res, auth.code, auth.response);
-      const tenant_id = auth.user.tenant_id;
       }
 
 
@@ -700,6 +1652,125 @@ if (req.method === "POST" && path === "/runtime/execute") {
         });
       }
 
+      const latestGovernanceResult = await db.query(`
+        SELECT *
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const latestGovernanceDecision =
+        latestGovernanceResult.rows[0] || null;
+
+      if (!latestGovernanceDecision) {
+        await writeEvent({
+          event_type: "runtime.governance.gate.review_required",
+          object_id,
+          message: "Schedule gate requires governance check before scheduling",
+          tenant_id
+        });
+
+        return send(res, 403, {
+          error: "governance_decision_required",
+          gate_status: "review_required",
+          object_id,
+          tenant_id
+        });
+      }
+
+      if (latestGovernanceDecision.governance_status === "blocked") {
+        await writeEvent({
+          event_type: "runtime.governance.gate.blocked",
+          object_id,
+          message: "Scheduling blocked by governance gate",
+          tenant_id
+        });
+
+        return send(res, 403, {
+          error: "schedule_blocked_by_governance",
+          gate_status: "blocked",
+          governance_status: latestGovernanceDecision.governance_status,
+          decision_id: latestGovernanceDecision.decision_id,
+          object_id,
+          tenant_id
+        });
+      }
+
+      if (latestGovernanceDecision.governance_status === "review_required") {
+        const approvalResult = await db.query(`
+          SELECT *
+          FROM runtime_governance_approvals
+          WHERE tenant_id = $1
+            AND decision_id = $2
+          ORDER BY created_at DESC
+          LIMIT 1
+        `, [
+          tenant_id,
+          latestGovernanceDecision.decision_id
+        ]);
+
+        const approval = approvalResult.rows[0] || null;
+
+        if (!approval) {
+          await writeEvent({
+            event_type: "runtime.governance.gate.review_required",
+            object_id,
+            message: "Scheduling requires review before governance gate allows scheduling",
+            tenant_id
+          });
+
+          return send(res, 403, {
+            error: "schedule_requires_governance_review",
+            gate_status: "review_required",
+            governance_status: latestGovernanceDecision.governance_status,
+            decision_id: latestGovernanceDecision.decision_id,
+            object_id,
+            tenant_id
+          });
+        }
+
+        if (approval.approval_status === "rejected") {
+          await writeEvent({
+            event_type: "runtime.governance.gate.blocked",
+            object_id,
+            message: "Scheduling rejected by governance approval",
+            tenant_id
+          });
+
+          return send(res, 403, {
+            error: "schedule_rejected_by_governance_approval",
+            gate_status: "blocked",
+            governance_status: latestGovernanceDecision.governance_status,
+            approval_status: approval.approval_status,
+            decision_id: latestGovernanceDecision.decision_id,
+            approval_id: approval.approval_id,
+            object_id,
+            tenant_id
+          });
+        }
+
+        if (approval.approval_status === "approved") {
+          await writeEvent({
+            event_type: "runtime.governance.gate.allowed",
+            object_id,
+            message: "Scheduling allowed by governance approval",
+            tenant_id
+          });
+        }
+      }
+
+      await writeEvent({
+        event_type: "runtime.governance.gate.allowed",
+        object_id,
+        message: "Scheduling allowed by governance gate",
+        tenant_id
+      });
+
       const job_id = `job-${Date.now()}`;
 
       const result = await db.query(`
@@ -748,6 +1819,112 @@ if (req.method === "POST" && path === "/runtime/execute") {
         job: result.rows[0]
       });
     }
+
+
+async function updateWorkflowState(
+  workflowId,
+  tenant_id,
+  object_id
+) {
+  const statsResult = await db.query(`
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (
+        WHERE status = 'completed'
+      )::int AS completed,
+      COUNT(*) FILTER (
+        WHERE status = 'failed_permanent'
+      )::int AS failed,
+      COUNT(*) FILTER (
+        WHERE execution_type = 'compensation.run'
+          AND status = 'completed'
+      )::int AS compensated,
+      COUNT(*) FILTER (
+        WHERE status IN (
+          'pending',
+          'running',
+          'failed'
+        )
+      )::int AS active
+    FROM runtime_execution_jobs
+    WHERE workflow_id = $1
+  `, [workflowId]);
+
+  const stats = statsResult.rows[0];
+
+  let workflowStatus = 'running';
+
+  if (
+    Number(stats.failed) > 0 &&
+    Number(stats.compensated) > 0
+  ) {
+    workflowStatus = 'compensated';
+  } else if (
+    Number(stats.failed) > 0 &&
+    Number(stats.completed) > 0
+  ) {
+    workflowStatus = 'partial_failed';
+  } else if (
+    Number(stats.failed) > 0
+  ) {
+    workflowStatus = 'failed';
+  } else if (
+    Number(stats.active) === 0
+  ) {
+    workflowStatus = 'completed';
+  }
+
+  await db.query(`
+    INSERT INTO runtime_workflow_instances (
+      workflow_id,
+      tenant_id,
+      object_id,
+      status,
+      job_count,
+      completed_count,
+      failed_count,
+      compensated_count,
+      updated_at,
+      completed_at
+    )
+    VALUES (
+      $1,$2,$3,$4,
+      $5,$6,$7,$8,
+      NOW(),
+      CASE
+        WHEN $4 IN (
+          'completed',
+          'failed',
+          'compensated',
+          'partial_failed'
+        )
+        THEN NOW()
+        ELSE NULL
+      END
+    )
+    ON CONFLICT (workflow_id)
+    DO UPDATE SET
+      status = EXCLUDED.status,
+      job_count = EXCLUDED.job_count,
+      completed_count = EXCLUDED.completed_count,
+      failed_count = EXCLUDED.failed_count,
+      compensated_count = EXCLUDED.compensated_count,
+      updated_at = NOW(),
+      completed_at = EXCLUDED.completed_at
+  `, [
+    workflowId,
+    tenant_id,
+    object_id,
+    workflowStatus,
+    Number(stats.total),
+    Number(stats.completed),
+    Number(stats.failed),
+    Number(stats.compensated)
+  ]);
+
+  return workflowStatus;
+}
+
 
     // RUNTIME WORKER V4 - LEASE LOCKING
 
@@ -852,7 +2029,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         }
 
         for (const edge of edges) {
-          if (edge.from === job.execution_type) {
+          const condition = edge.condition || "success";
+
+          if (
+            edge.from === job.execution_type &&
+            condition === "success"
+          ) {
 
             if (Array.isArray(edge.to)) {
               nextTypes.push(...edge.to);
@@ -980,12 +2162,126 @@ if (req.method === "POST" && path === "/runtime/execute") {
           tenant_id
         });
 
+        // WORKFLOW TERMINAL STATE ENGINE V1
+
+        const workflowId =
+          job.workflow_id || job.job_id;
+
+        const statsResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (
+              WHERE status = 'completed'
+            )::int AS completed,
+            COUNT(*) FILTER (
+              WHERE status = 'failed_permanent'
+            )::int AS failed,
+            COUNT(*) FILTER (
+              WHERE execution_type = 'compensation.run'
+                AND status = 'completed'
+            )::int AS compensated,
+            COUNT(*) FILTER (
+              WHERE status IN (
+                'pending',
+                'running',
+                'failed'
+              )
+            )::int AS active
+          FROM runtime_execution_jobs
+          WHERE workflow_id = $1
+        `, [workflowId]);
+
+        const stats = statsResult.rows[0];
+
+        let workflowStatus = 'running';
+
+        if (
+          Number(stats.failed) > 0 &&
+          Number(stats.compensated) > 0
+        ) {
+          workflowStatus = 'compensated';
+
+        } else if (
+          Number(stats.failed) > 0 &&
+          Number(stats.completed) > 0
+        ) {
+          workflowStatus = 'partial_failed';
+
+        } else if (
+          Number(stats.failed) > 0
+        ) {
+          workflowStatus = 'failed';
+
+        } else if (
+          Number(stats.active) === 0
+        ) {
+          workflowStatus = 'completed';
+        }
+
+        await db.query(`
+          INSERT INTO runtime_workflow_instances (
+            workflow_id,
+            tenant_id,
+            object_id,
+            status,
+            job_count,
+            completed_count,
+            failed_count,
+            compensated_count,
+            updated_at,
+            completed_at
+          )
+          VALUES (
+            $1,$2,$3,$4,
+            $5,$6,$7,$8,
+            NOW(),
+            CASE
+              WHEN $4 IN (
+                'completed',
+                'failed',
+                'compensated',
+                'partial_failed'
+              )
+              THEN NOW()
+              ELSE NULL
+            END
+          )
+          ON CONFLICT (workflow_id)
+          DO UPDATE SET
+            status = EXCLUDED.status,
+            job_count = EXCLUDED.job_count,
+            completed_count = EXCLUDED.completed_count,
+            failed_count = EXCLUDED.failed_count,
+            compensated_count =
+              EXCLUDED.compensated_count,
+            updated_at = NOW(),
+            completed_at = EXCLUDED.completed_at
+        `, [
+          workflowId,
+          tenant_id,
+          job.object_id,
+          workflowStatus,
+          Number(stats.total),
+          Number(stats.completed),
+          Number(stats.failed),
+          Number(stats.compensated)
+        ]);
+
+        await writeEvent({
+          event_type: "runtime.workflow.state_updated",
+          object_id: job.object_id,
+          message:
+            `Workflow state updated: ${workflowStatus}`,
+          tenant_id
+        });
+
         return send(res, 200, {
           worker: "completed",
           worker_id,
           job_id: job.job_id,
           object_id: job.object_id,
-          execution_type: job.execution_type
+          execution_type: job.execution_type,
+          workflow_status: workflowStatus
         });
 
       } catch (workerErr) {
@@ -1020,6 +2316,99 @@ if (req.method === "POST" && path === "/runtime/execute") {
           message: `Execution failed by ${worker_id}: ${workerErr.message}`,
           tenant_id
         });
+
+        // DAG FAILURE ROUTING V1
+        const failureDagPayload = job.payload || {};
+        const failureDag = failureDagPayload.dag || {};
+        const failureEdges = Array.isArray(failureDag.edges) ? failureDag.edges : [];
+
+        let failureTargets = [];
+
+        for (const edge of failureEdges) {
+          const condition = edge.condition || "success";
+
+          if (
+            edge.from === job.execution_type &&
+            condition === "failed"
+          ) {
+            if (Array.isArray(edge.to)) {
+              failureTargets.push(...edge.to);
+            } else if (edge.to) {
+              failureTargets.push(edge.to);
+            }
+          }
+        }
+
+        failureTargets = [...new Set(failureTargets)];
+
+        for (const nextType of failureTargets) {
+          const existingJob = await db.query(`
+            SELECT job_id
+            FROM runtime_execution_jobs
+            WHERE workflow_id = $1
+              AND execution_type = $2
+            LIMIT 1
+          `, [
+            job.workflow_id || job.job_id,
+            nextType
+          ]);
+
+          if (existingJob.rows.length > 0) {
+            continue;
+          }
+
+          const nextJobId = `job-${Date.now()}-${Math.random()
+            .toString(16)
+            .slice(2, 8)}`;
+
+          await db.query(`
+            INSERT INTO runtime_execution_jobs (
+              job_id,
+              tenant_id,
+              object_id,
+              execution_type,
+              status,
+              payload,
+              workflow_id,
+              parent_job_id,
+              chain_position,
+              requested_by,
+              created_at
+            )
+            VALUES (
+              $1,$2,$3,$4,
+              'pending',
+              $5,
+              $6,
+              $7,
+              $8,
+              'workflow-engine',
+              NOW()
+            )
+          `, [
+            nextJobId,
+            tenant_id,
+            job.object_id,
+            nextType,
+            JSON.stringify(job.payload || {}),
+            job.workflow_id || job.job_id,
+            job.job_id,
+            Number(job.chain_position || 0) + 1
+          ]);
+
+          await writeEvent({
+            event_type: "runtime.workflow.failure_routing",
+            object_id: job.object_id,
+            message: `Failure route created: ${nextType}`,
+            tenant_id
+          });
+        }
+
+        await updateWorkflowState(
+          job.workflow_id || job.job_id,
+          tenant_id,
+          job.object_id
+        );
 
         return send(res, 500, {
           worker: "failed",

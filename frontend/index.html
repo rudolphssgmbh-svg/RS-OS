@@ -32,6 +32,8 @@
   <button onclick="loadDashboard()">Dashboard laden</button>
   <button onclick="loadObjects()">Objekte laden</button>
   <button onclick="loadEvents()">Events laden</button>
+<button onclick="loadExecutionIntelligence()">Execution Intelligence</button>
+<button onclick="loadVision()">Vision Layer</button>
 </div>
 
 <div class="card">
@@ -210,6 +212,90 @@ async function loadDashboard() {
 
 function loadObjects(){ return get("/runtime/objects"); }
 function loadEvents(){ return get("/runtime/events"); }
+async function loadExecutionIntelligence() {
+  const token = getToken();
+
+  const res = await fetch(API + "/runtime/execution/intelligence", {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + token
+    }
+  });
+async function loadVision() {
+
+  const token = getToken();
+
+  const res = await fetch(API + "/runtime/vision", {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + token
+    }
+  });
+
+  const data = await res.json();
+
+  show(data);
+
+  const v = data.vision;
+
+  document.getElementById("summary").innerHTML = `
+    <div class="card">
+      <h3>Runtime Posture</h3>
+      <p>${v.runtime_posture}</p>
+    </div>
+
+    <div class="card">
+      <h3>Strategic Priority</h3>
+      <p>${v.strategic_priority}</p>
+    </div>
+
+    <div class="card">
+      <h3>Next Best Action</h3>
+      <p>${v.next_best_action}</p>
+    </div>
+
+    <div class="card">
+      <h3>Vision Summary</h3>
+      <p>${v.vision_summary}</p>
+    </div>
+
+    <div class="card">
+      <h3>Vision Metrics</h3>
+      <p>Total Objects: ${v.metrics.total_objects}</p>
+      <p>Active Objects: ${v.metrics.active_objects}</p>
+      <p>High Risk: ${v.metrics.high_risk_objects}</p>
+      <p>Total Jobs: ${v.metrics.total_jobs}</p>
+      <p>Recent Events: ${v.metrics.recent_events}</p>
+    </div>
+
+    <div class="card">
+      <h3>Recommendations</h3>
+      ${v.recommendations.map(r => `<p>${r}</p>`).join("")}
+    </div>
+  `;
+}
+
+  const data = await res.json();
+  show(data);
+
+  const i = data.intelligence;
+
+  document.getElementById("summary").innerHTML = `
+    <div class="card"><h3>Execution Health</h3><p>${i.execution_health}</p></div>
+    <div class="card"><h3>Risk Level</h3><p>${i.risk_level}</p></div>
+    <div class="card"><h3>Jobs</h3>
+      <p>Total: ${i.metrics.total_jobs}</p>
+      <p>Queued: ${i.metrics.queued_jobs}</p>
+      <p>Running: ${i.metrics.running_jobs}</p>
+      <p>Completed: ${i.metrics.completed_jobs}</p>
+      <p>Failed: ${i.metrics.failed_jobs}</p>
+    </div>
+    <div class="card"><h3>Empfehlungen</h3>
+      ${i.recommended_actions.map(a => `<p>${a}</p>`).join("")}
+    </div>
+  `;
+}
+
 function loadControl(){ return get("/runtime/control/" + document.getElementById("objectId").value); }
 function loadReplay(){ return get("/runtime/replay/" + document.getElementById("objectId").value); }
 function loadRecovery(){ return get("/runtime/recovery/" + document.getElementById("objectId").value); }
