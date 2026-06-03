@@ -1445,10 +1445,28 @@ if (req.method === "POST" && path === "/runtime/execute") {
           ? true
           : false;
 
+      const competencyResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS competency_count,
+          COALESCE(MAX(gap), 0)::int AS max_gap
+        FROM runtime_competencies
+        WHERE tenant_id = $1
+          AND person_id = $2
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const competencyGap =
+        competencyResult.rows.length > 0
+          ? Number(competencyResult.rows[0].max_gap || 0)
+          : 0;
+
       const context = {
         risk_score: riskScore,
         open_high_actions: highOpenActions.length,
-        governance_review_without_approval: governanceReviewWithoutApproval
+        governance_review_without_approval: governanceReviewWithoutApproval,
+        competency_gap: competencyGap
       };
 
       function evaluateRecommendationRule(condition, context) {
@@ -1516,6 +1534,15 @@ if (req.method === "POST" && path === "/runtime/execute") {
             decision_id: latestGovernance ? latestGovernance.decision_id : null,
             governance_status: latestGovernance ? latestGovernance.governance_status : null,
             reason_codes: latestGovernance ? latestGovernance.reason_codes : null
+          };
+        }
+
+        if (recommendation_type === "TRAINING_REQUIRED") {
+          reason = `Competency gap detected; training or micro-learning should be planned.`;
+          evidence = {
+            ...evidence,
+            competency_gap: competencyGap,
+            person_id: object_id
           };
         }
 
