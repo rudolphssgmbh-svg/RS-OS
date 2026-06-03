@@ -1296,6 +1296,78 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // GET RUNTIME TRAINING PLANS BY PERSON
+
+    if (req.method === "GET" && path.startsWith("/runtime/training-plans/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const person_id = decodeURIComponent(
+        path.replace("/runtime/training-plans/", "")
+      );
+
+      if (!person_id) {
+        return send(res, 400, {
+          error: "missing_person_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          training_plan_id,
+          person_id,
+          competency_name,
+          recommendation_id,
+          training_type,
+          estimated_duration_minutes,
+          status,
+          created_by,
+          created_at,
+          approved_by,
+          approved_at,
+          completed_by,
+          completed_at
+        FROM runtime_training_plans
+        WHERE tenant_id = $1
+          AND person_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        person_id
+      ]);
+
+      const planned_count = result.rows.filter(row => row.status === "planned").length;
+      const approved_count = result.rows.filter(row => row.status === "approved").length;
+      const completed_count = result.rows.filter(row => row.status === "completed").length;
+
+      const total_estimated_minutes = result.rows.reduce(
+        (sum, row) => sum + Number(row.estimated_duration_minutes || 0),
+        0
+      );
+
+      return send(res, 200, {
+        tenant_id,
+        person_id,
+        training_plan_count: result.rows.length,
+        planned_count,
+        approved_count,
+        completed_count,
+        total_estimated_minutes,
+        training_plans: result.rows
+      });
+    }
+
     // GET RUNTIME COMPETENCIES BY PERSON
 
     if (req.method === "GET" && path.startsWith("/runtime/competencies/")) {
