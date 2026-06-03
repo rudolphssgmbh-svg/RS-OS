@@ -2400,6 +2400,170 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // GET ORCHESTRATION TRACE
+
+    if (req.method === "GET" && path.startsWith("/runtime/orchestrations/") && path.endsWith("/trace")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const orchestration_id = decodeURIComponent(
+        path
+          .replace("/runtime/orchestrations/", "")
+          .replace("/trace", "")
+      );
+
+      if (!orchestration_id) {
+        return send(res, 400, {
+          error: "missing_orchestration_id"
+        });
+      }
+
+      const orchestrationResult = await db.query(`
+        SELECT *
+        FROM runtime_orchestrations
+        WHERE tenant_id = $1
+          AND orchestration_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        orchestration_id
+      ]);
+
+      if (orchestrationResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "orchestration_not_found",
+          orchestration_id
+        });
+      }
+
+      const orchestration = orchestrationResult.rows[0];
+
+      const payload = orchestration.payload || {};
+      const rule_id = payload.rule_id || null;
+
+      let rule = null;
+
+      if (rule_id) {
+        const ruleResult = await db.query(`
+          SELECT *
+          FROM runtime_orchestration_rules
+          WHERE tenant_id = $1
+            AND rule_id = $2
+          LIMIT 1
+        `, [
+          tenant_id,
+          rule_id
+        ]);
+
+        rule = ruleResult.rows[0] || null;
+      }
+
+      const jobsResult = await db.query(`
+        SELECT
+          job_id,
+          object_id,
+          execution_type,
+          status,
+          requested_by,
+          worker_id,
+          payload,
+          created_at,
+          started_at,
+          completed_at,
+          last_error
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND (
+            object_id = $2
+            OR payload::text LIKE $3
+          )
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        orchestration.source_object_id,
+        `%${orchestration_id}%`
+      ]);
+
+      const recommendationsResult = await db.query(`
+        SELECT
+          recommendation_id,
+          object_id,
+          recommendation_type,
+          priority,
+          status,
+          reason,
+          evidence,
+          created_by,
+          created_at,
+          approved_by,
+          approved_at,
+          executed_job_id,
+          executed_at
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        orchestration.source_object_id
+      ]);
+
+      const auditResult = await db.query(`
+        SELECT
+          event_id,
+          event_type,
+          object_id,
+          message,
+          audit_hash,
+          previous_hash,
+          created_at
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+          AND (
+            event_type LIKE 'runtime.orchestration.%'
+            OR event_type LIKE 'runtime.recommendations.%'
+            OR event_type LIKE 'runtime.training.%'
+            OR event_type LIKE 'runtime.learning.%'
+          )
+        ORDER BY created_at ASC
+      `, [
+        tenant_id,
+        orchestration.source_object_id
+      ]);
+
+      return send(res, 200, {
+        tenant_id,
+        orchestration_id,
+        source_object_id: orchestration.source_object_id,
+        orchestration,
+        rule,
+        jobs: {
+          job_count: jobsResult.rows.length,
+          items: jobsResult.rows
+        },
+        recommendations: {
+          recommendation_count: recommendationsResult.rows.length,
+          items: recommendationsResult.rows
+        },
+        audit: {
+          event_count: auditResult.rows.length,
+          events: auditResult.rows
+        }
+      });
+    }
+
     // GET RUNTIME ORCHESTRATIONS
 
     if (req.method === "GET" && path === "/runtime/orchestrations") {
@@ -3854,6 +4018,198 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // GET RECOMMENDATION TRACE
+
+    if (req.method === "GET" && path.startsWith("/runtime/recommendations/trace/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const recommendation_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/trace/", "")
+      );
+
+      if (!recommendation_id) {
+        return send(res, 400, {
+          error: "missing_recommendation_id"
+        });
+      }
+
+      const recommendationResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND recommendation_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        recommendation_id
+      ]);
+
+      if (recommendationResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "recommendation_not_found",
+          recommendation_id
+        });
+      }
+
+      const recommendation = recommendationResult.rows[0];
+      const evidence = recommendation.evidence || {};
+      const rule_id = evidence.rule_id || null;
+
+      let rule = null;
+
+      if (rule_id) {
+        const ruleResult = await db.query(`
+          SELECT *
+          FROM runtime_recommendation_rules
+          WHERE tenant_id = $1
+            AND rule_id = $2
+          LIMIT 1
+        `, [
+          tenant_id,
+          rule_id
+        ]);
+
+        rule = ruleResult.rows[0] || null;
+      }
+
+      const jobsResult = await db.query(`
+        SELECT
+          job_id,
+          object_id,
+          execution_type,
+          status,
+          requested_by,
+          worker_id,
+          payload,
+          created_at,
+          started_at,
+          completed_at,
+          last_error
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND (
+            job_id = $2
+            OR object_id = $3
+            OR payload::text LIKE $4
+          )
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        recommendation.executed_job_id,
+        recommendation.object_id,
+        `%${recommendation_id}%`
+      ]);
+
+      const trainingPlansResult = await db.query(`
+        SELECT
+          training_plan_id,
+          person_id,
+          competency_name,
+          recommendation_id,
+          training_type,
+          estimated_duration_minutes,
+          status,
+          created_by,
+          created_at,
+          approved_by,
+          approved_at,
+          completed_by,
+          completed_at
+        FROM runtime_training_plans
+        WHERE tenant_id = $1
+          AND (
+            recommendation_id = $2
+            OR person_id = $3
+          )
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        recommendation_id,
+        recommendation.object_id
+      ]);
+
+      const learningEvidenceResult = await db.query(`
+        SELECT
+          evidence_id,
+          person_id,
+          competency_name,
+          training_plan_id,
+          gap_before,
+          gap_after,
+          effectiveness,
+          created_by,
+          created_at
+        FROM runtime_learning_evidence
+        WHERE tenant_id = $1
+          AND person_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        recommendation.object_id
+      ]);
+
+      const auditResult = await db.query(`
+        SELECT
+          event_id,
+          event_type,
+          object_id,
+          message,
+          audit_hash,
+          previous_hash,
+          created_at
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+          AND (
+            event_type LIKE 'runtime.recommendation.%'
+            OR event_type LIKE 'runtime.recommendations.%'
+            OR event_type LIKE 'runtime.training.%'
+            OR event_type LIKE 'runtime.learning.%'
+            OR event_type LIKE 'runtime.orchestration.%'
+          )
+        ORDER BY created_at ASC
+      `, [
+        tenant_id,
+        recommendation.object_id
+      ]);
+
+      return send(res, 200, {
+        tenant_id,
+        recommendation_id,
+        object_id: recommendation.object_id,
+        recommendation,
+        source_rule: rule,
+        execution_jobs: {
+          job_count: jobsResult.rows.length,
+          items: jobsResult.rows
+        },
+        training_plans: {
+          training_plan_count: trainingPlansResult.rows.length,
+          items: trainingPlansResult.rows
+        },
+        learning_evidence: {
+          evidence_count: learningEvidenceResult.rows.length,
+          items: learningEvidenceResult.rows
+        },
+        audit: {
+          event_count: auditResult.rows.length,
+          events: auditResult.rows
+        }
+      });
+    }
+
     // GET RUNTIME RECOMMENDATIONS BY OBJECT
 
     if (req.method === "GET" && path.startsWith("/runtime/recommendations/")) {
@@ -3926,6 +4282,216 @@ if (req.method === "POST" && path === "/runtime/execute") {
         executed_count,
         rejected_count,
         recommendations: result.rows
+      });
+    }
+
+
+    // GET FULL OBJECT TRACE
+
+    if (req.method === "GET" && path.startsWith("/runtime/trace/") && path.endsWith("/full")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const object_id = decodeURIComponent(
+        path
+          .replace("/runtime/trace/", "")
+          .replace("/full", "")
+      );
+
+      if (!object_id) {
+        return send(res, 400, {
+          error: "missing_object_id"
+        });
+      }
+
+      const objectResult = await db.query(`
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+          AND object_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const relationsResult = await db.query(`
+        SELECT *
+        FROM runtime_relations
+        WHERE tenant_id = $1
+          AND (
+            source_object_id = $2
+            OR target_object_id = $2
+          )
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const recommendationsResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const orchestrationsResult = await db.query(`
+        SELECT *
+        FROM runtime_orchestrations
+        WHERE tenant_id = $1
+          AND source_object_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const trainingPlansResult = await db.query(`
+        SELECT *
+        FROM runtime_training_plans
+        WHERE tenant_id = $1
+          AND person_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const learningEvidenceResult = await db.query(`
+        SELECT *
+        FROM runtime_learning_evidence
+        WHERE tenant_id = $1
+          AND person_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const executionJobsResult = await db.query(`
+        SELECT *
+        FROM runtime_execution_jobs
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const governanceResult = await db.query(`
+        SELECT *
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const risksResult = await db.query(`
+        SELECT *
+        FROM runtime_risks
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      const auditResult = await db.query(`
+        SELECT *
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at ASC
+      `, [
+        tenant_id,
+        object_id
+      ]);
+
+      return send(res, 200, {
+        tenant_id,
+        object_id,
+        exists_in_runtime_objects: objectResult.rows.length > 0,
+        runtime_object: objectResult.rows[0] || null,
+        relations: {
+          count: relationsResult.rows.length,
+          items: relationsResult.rows
+        },
+        recommendations: {
+          count: recommendationsResult.rows.length,
+          open_count: recommendationsResult.rows.filter(r => r.status === "open").length,
+          approved_count: recommendationsResult.rows.filter(r => r.status === "approved").length,
+          executed_count: recommendationsResult.rows.filter(r => r.status === "executed").length,
+          rejected_count: recommendationsResult.rows.filter(r => r.status === "rejected").length,
+          items: recommendationsResult.rows
+        },
+        orchestrations: {
+          count: orchestrationsResult.rows.length,
+          pending_count: orchestrationsResult.rows.filter(o => o.status === "pending").length,
+          approved_count: orchestrationsResult.rows.filter(o => o.status === "approved").length,
+          executed_count: orchestrationsResult.rows.filter(o => o.status === "executed").length,
+          completed_count: orchestrationsResult.rows.filter(o => o.status === "completed").length,
+          items: orchestrationsResult.rows
+        },
+        training_plans: {
+          count: trainingPlansResult.rows.length,
+          planned_count: trainingPlansResult.rows.filter(t => t.status === "planned").length,
+          completed_count: trainingPlansResult.rows.filter(t => t.status === "completed").length,
+          items: trainingPlansResult.rows
+        },
+        learning_evidence: {
+          count: learningEvidenceResult.rows.length,
+          positive_count: learningEvidenceResult.rows.filter(e => e.effectiveness === "positive").length,
+          neutral_count: learningEvidenceResult.rows.filter(e => e.effectiveness === "neutral").length,
+          negative_count: learningEvidenceResult.rows.filter(e => e.effectiveness === "negative").length,
+          items: learningEvidenceResult.rows
+        },
+        execution_jobs: {
+          count: executionJobsResult.rows.length,
+          pending_count: executionJobsResult.rows.filter(j => j.status === "pending").length,
+          running_count: executionJobsResult.rows.filter(j => j.status === "running").length,
+          completed_count: executionJobsResult.rows.filter(j => j.status === "completed").length,
+          failed_count: executionJobsResult.rows.filter(j =>
+            j.status === "failed" || j.status === "failed_permanent"
+          ).length,
+          items: executionJobsResult.rows
+        },
+        governance: {
+          count: governanceResult.rows.length,
+          items: governanceResult.rows
+        },
+        risks: {
+          count: risksResult.rows.length,
+          max_risk_score: risksResult.rows.reduce(
+            (max, risk) => Math.max(max, Number(risk.risk_score || 0)),
+            0
+          ),
+          acute_count: risksResult.rows.filter(r => r.risk_state === "acute").length,
+          items: risksResult.rows
+        },
+        audit: {
+          count: auditResult.rows.length,
+          items: auditResult.rows
+        }
       });
     }
 
