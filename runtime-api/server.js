@@ -1788,6 +1788,59 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       const completedCommunication = updateResult.rows[0];
 
+      const createdAt = completedCommunication.created_at ? new Date(completedCommunication.created_at).getTime() : null;
+      const acknowledgedAt = completedCommunication.acknowledged_at ? new Date(completedCommunication.acknowledged_at).getTime() : null;
+      const completedAt = completedCommunication.completed_at ? new Date(completedCommunication.completed_at).getTime() : null;
+
+      const ackLatencySeconds =
+        createdAt && acknowledgedAt
+          ? Math.round((acknowledgedAt - createdAt) / 1000)
+          : null;
+
+      const completionLatencySeconds =
+        createdAt && completedAt
+          ? Math.round((completedAt - createdAt) / 1000)
+          : null;
+
+      const communicationEffectiveness = "positive";
+
+      const communication_evidence_id =
+        "cev-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      await db.query(`
+        INSERT INTO runtime_communication_evidence (
+          communication_evidence_id,
+          tenant_id,
+          communication_event_id,
+          sender_id,
+          receiver_id,
+          message_type,
+          ack_latency_seconds,
+          completion_latency_seconds,
+          effectiveness,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `, [
+        communication_evidence_id,
+        tenant_id,
+        completedCommunication.communication_event_id,
+        completedCommunication.sender_id,
+        completedCommunication.receiver_id,
+        completedCommunication.message_type,
+        ackLatencySeconds,
+        completionLatencySeconds,
+        communicationEffectiveness,
+        completed_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: completedCommunication.receiver_id,
+        event_type: "runtime.communication.evidence.created",
+        message: `Communication evidence created: ${communicationEffectiveness}`
+      });
+
       await writeEvent({
         tenant_id,
         object_id: completedCommunication.receiver_id,
@@ -1797,7 +1850,18 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       return send(res, 200, {
         completed: true,
-        communication: completedCommunication
+        communication: completedCommunication,
+        communication_evidence_created: true,
+        communication_evidence: {
+          communication_evidence_id,
+          communication_event_id: completedCommunication.communication_event_id,
+          sender_id: completedCommunication.sender_id,
+          receiver_id: completedCommunication.receiver_id,
+          message_type: completedCommunication.message_type,
+          ack_latency_seconds: ackLatencySeconds,
+          completion_latency_seconds: completionLatencySeconds,
+          effectiveness: communicationEffectiveness
+        }
       });
     }
 
