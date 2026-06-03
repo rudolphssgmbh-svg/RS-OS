@@ -5076,6 +5076,41 @@ async function updateWorkflowState(
             requested_by: "orchestration-worker"
           });
 
+          const refreshPayload = job.payload || {};
+          const orchestrationId = refreshPayload.orchestration_id || null;
+
+          let completedOrchestration = null;
+
+          if (orchestrationId) {
+            const orchestrationCompleteResult = await db.query(`
+              UPDATE runtime_orchestrations
+              SET
+                status = 'completed',
+                completed_by = $1,
+                completed_at = now()
+              WHERE tenant_id = $2
+                AND orchestration_id = $3
+                AND status = 'executed'
+              RETURNING *
+            `, [
+              worker_id,
+              tenant_id,
+              orchestrationId
+            ]);
+
+            if (orchestrationCompleteResult.rows.length > 0) {
+              completedOrchestration = orchestrationCompleteResult.rows[0];
+
+              await writeEvent({
+                event_type: "runtime.orchestration.completed",
+                object_id: completedOrchestration.source_object_id,
+                message:
+                  `Orchestration automatically completed by worker: ${completedOrchestration.orchestration_type}`,
+                tenant_id
+              });
+            }
+          }
+
           await writeEvent({
             event_type: "runtime.recommendations.refresh.completed",
             object_id: job.object_id,
