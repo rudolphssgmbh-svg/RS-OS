@@ -1371,92 +1371,45 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       const completedTrainingPlan = updateResult.rows[0];
 
-      await writeEvent({
-        tenant_id,
-        object_id: completedTrainingPlan.person_id,
-        event_type: "runtime.training.completed",
-        message: `Training completed: ${completedTrainingPlan.competency_name}`
-      });
-
-      return send(res, 200, {
-        completed: true,
-        training_plan: completedTrainingPlan
-      });
-    }
-
-
-    // COMPLETE RUNTIME TRAINING PLAN
-
-    if (req.method === "POST" && path.startsWith("/runtime/training-plans/complete/")) {
-
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "governance"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const training_plan_id = decodeURIComponent(
-        path.replace("/runtime/training-plans/complete/", "")
-      );
-
-      if (!training_plan_id) {
-        return send(res, 400, {
-          error: "missing_training_plan_id"
-        });
-      }
-
-      const existingResult = await db.query(`
-        SELECT *
-        FROM runtime_training_plans
-        WHERE tenant_id = $1
-          AND training_plan_id = $2
-        LIMIT 1
-      `, [
-        tenant_id,
-        training_plan_id
-      ]);
-
-      if (existingResult.rows.length === 0) {
-        return send(res, 404, {
-          error: "training_plan_not_found",
-          training_plan_id
-        });
-      }
-
-      const trainingPlan = existingResult.rows[0];
-
-      if (trainingPlan.status === "completed") {
-        return send(res, 409, {
-          error: "training_plan_already_completed",
-          training_plan_id,
-          current_status: trainingPlan.status
-        });
-      }
-
-      const completed_by =
-        auth.user.operator_id || auth.user.username || "runtime_admin";
-
-      const updateResult = await db.query(`
-        UPDATE runtime_training_plans
+      const competencyUpdateResult = await db.query(`
+        UPDATE runtime_competencies
         SET
-          status = 'completed',
-          completed_by = $1,
-          completed_at = now()
+          actual_level = LEAST(required_level, actual_level + 1),
+          gap = GREATEST(required_level - LEAST(required_level, actual_level + 1), 0),
+          updated_by = $1,
+          updated_at = now()
         WHERE tenant_id = $2
-          AND training_plan_id = $3
-        RETURNING *
+          AND person_id = $3
+          AND competency_name = $4
+        RETURNING
+          competency_id,
+          person_id,
+          competency_name,
+          required_level,
+          actual_level,
+          gap,
+          updated_by,
+          updated_at
       `, [
         completed_by,
         tenant_id,
-        training_plan_id
+        completedTrainingPlan.person_id,
+        completedTrainingPlan.competency_name
       ]);
 
-      const completedTrainingPlan = updateResult.rows[0];
+      const updatedCompetency =
+        competencyUpdateResult.rows.length > 0
+          ? competencyUpdateResult.rows[0]
+          : null;
+
+      if (updatedCompetency) {
+        await writeEvent({
+          tenant_id,
+          object_id: completedTrainingPlan.person_id,
+          event_type: "runtime.competency.improved",
+          message: `Competency improved: ${updatedCompetency.competency_name}`
+        });
+      }
 
       await writeEvent({
         tenant_id,
@@ -1467,7 +1420,9 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       return send(res, 200, {
         completed: true,
-        training_plan: completedTrainingPlan
+        training_plan: completedTrainingPlan,
+        competency_updated: updatedCompetency !== null,
+        competency: updatedCompetency
       });
     }
 
