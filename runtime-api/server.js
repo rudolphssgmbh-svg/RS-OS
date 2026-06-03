@@ -1603,6 +1603,85 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // CREATE RUNTIME ORCHESTRATION
+
+    if (req.method === "POST" && path === "/runtime/orchestrations") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = auth.user.tenant_id;
+
+      const source_event_type = body.source_event_type;
+      const source_object_id = body.source_object_id || null;
+      const orchestration_type = body.orchestration_type;
+      const payload = body.payload || {};
+
+      if (!source_event_type || !orchestration_type) {
+        return send(res, 400, {
+          error: "missing_required_orchestration_fields"
+        });
+      }
+
+      const orchestration_id =
+        "orch-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      await db.query(`
+        INSERT INTO runtime_orchestrations (
+          orchestration_id,
+          tenant_id,
+          source_event_type,
+          source_object_id,
+          orchestration_type,
+          status,
+          payload,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,'pending',$6,$7)
+      `, [
+        orchestration_id,
+        tenant_id,
+        source_event_type,
+        source_object_id,
+        orchestration_type,
+        JSON.stringify(payload),
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: source_object_id,
+        event_type: "runtime.orchestration.created",
+        message: `Orchestration created: ${orchestration_type}`
+      });
+
+      return send(res, 200, {
+        created: true,
+        orchestration: {
+          orchestration_id,
+          tenant_id,
+          source_event_type,
+          source_object_id,
+          orchestration_type,
+          status: "pending",
+          payload,
+          created_by
+        }
+      });
+    }
+
     // GET COMMUNICATION SUMMARY BY RECEIVER
 
     if (req.method === "GET" && path.startsWith("/runtime/communication-summary/")) {
