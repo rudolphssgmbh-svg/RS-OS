@@ -4351,6 +4351,74 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // DELETE RELATION
+
+    if (req.method === "DELETE" && path.startsWith("/runtime/relations/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const relation_id = decodeURIComponent(
+        path.replace("/runtime/relations/", "")
+      );
+
+      if (!relation_id) {
+        return send(res, 400, {
+          error: "missing_relation_id"
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT *
+        FROM runtime_relations
+        WHERE tenant_id = $1
+          AND relation_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        relation_id
+      ]);
+
+      if (existingResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "relation_not_found",
+          relation_id
+        });
+      }
+
+      const relation = existingResult.rows[0];
+
+      await db.query(`
+        DELETE FROM runtime_relations
+        WHERE tenant_id = $1
+          AND relation_id = $2
+      `, [
+        tenant_id,
+        relation_id
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: relation.source_object_id,
+        event_type: "runtime.relation.deleted",
+        message: `Relation deleted: ${relation.source_object_id} ${relation.relation_type} ${relation.target_object_id}`
+      });
+
+      return send(res, 200, {
+        deleted: true,
+        relation
+      });
+    }
+
     // GET RELATIONS
 
     if (req.method === "GET" && path === "/runtime/relations") {
