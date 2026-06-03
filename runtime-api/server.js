@@ -1770,6 +1770,93 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // EXECUTE RUNTIME ORCHESTRATION
+
+    if (req.method === "POST" && path.startsWith("/runtime/orchestrations/execute/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const orchestration_id = decodeURIComponent(
+        path.replace("/runtime/orchestrations/execute/", "")
+      );
+
+      if (!orchestration_id) {
+        return send(res, 400, {
+          error: "missing_orchestration_id"
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT *
+        FROM runtime_orchestrations
+        WHERE tenant_id = $1
+          AND orchestration_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        orchestration_id
+      ]);
+
+      if (existingResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "orchestration_not_found",
+          orchestration_id
+        });
+      }
+
+      const orchestration = existingResult.rows[0];
+
+      if (orchestration.status !== "approved") {
+        return send(res, 409, {
+          error: "orchestration_not_approved",
+          orchestration_id,
+          current_status: orchestration.status
+        });
+      }
+
+      const executed_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const updateResult = await db.query(`
+        UPDATE runtime_orchestrations
+        SET
+          status = 'executed',
+          executed_by = $1,
+          executed_at = now()
+        WHERE tenant_id = $2
+          AND orchestration_id = $3
+        RETURNING *
+      `, [
+        executed_by,
+        tenant_id,
+        orchestration_id
+      ]);
+
+      const executedOrchestration = updateResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: executedOrchestration.source_object_id,
+        event_type: "runtime.orchestration.executed",
+        message: `Orchestration executed: ${executedOrchestration.orchestration_type}`
+      });
+
+      return send(res, 200, {
+        executed: true,
+        orchestration: executedOrchestration
+      });
+    }
+
     // GET RUNTIME ORCHESTRATIONS
 
     if (req.method === "GET" && path === "/runtime/orchestrations") {
