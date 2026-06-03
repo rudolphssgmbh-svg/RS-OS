@@ -1944,6 +1944,50 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // GET ORCHESTRATION RULES
+
+    if (req.method === "GET" && path === "/runtime/orchestration-rules") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT
+          rule_id,
+          tenant_id,
+          rule_name,
+          source_event_type,
+          orchestration_type,
+          enabled,
+          payload_template,
+          created_by,
+          created_at
+        FROM runtime_orchestration_rules
+        WHERE tenant_id = $1
+        ORDER BY rule_name ASC
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        tenant_id,
+        rule_count: result.rows.length,
+        enabled_count: result.rows.filter(r => r.enabled).length,
+        disabled_count: result.rows.filter(r => !r.enabled).length,
+        rules: result.rows
+      });
+    }
+
     // GET RUNTIME ORCHESTRATIONS
 
     if (req.method === "GET" && path === "/runtime/orchestrations") {
