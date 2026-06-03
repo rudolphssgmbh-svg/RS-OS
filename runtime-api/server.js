@@ -1295,6 +1295,71 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // GET RUNTIME COMPETENCIES BY PERSON
+
+    if (req.method === "GET" && path.startsWith("/runtime/competencies/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const person_id = decodeURIComponent(
+        path.replace("/runtime/competencies/", "")
+      );
+
+      if (!person_id) {
+        return send(res, 400, {
+          error: "missing_person_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          competency_id,
+          person_id,
+          competency_name,
+          required_level,
+          actual_level,
+          gap,
+          created_by,
+          created_at,
+          updated_by,
+          updated_at
+        FROM runtime_competencies
+        WHERE tenant_id = $1
+          AND person_id = $2
+        ORDER BY gap DESC, competency_name ASC
+      `, [
+        tenant_id,
+        person_id
+      ]);
+
+      const max_gap = result.rows.reduce(
+        (max, row) => Math.max(max, Number(row.gap || 0)),
+        0
+      );
+
+      const open_gap_count = result.rows.filter(row => Number(row.gap || 0) > 0).length;
+
+      return send(res, 200, {
+        tenant_id,
+        person_id,
+        competency_count: result.rows.length,
+        open_gap_count,
+        max_gap,
+        competencies: result.rows
+      });
+    }
+
     // GET RUNTIME RECOMMENDATION RULES
 
     if (req.method === "GET" && path === "/runtime/recommendation-rules") {
