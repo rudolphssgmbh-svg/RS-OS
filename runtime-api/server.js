@@ -1493,12 +1493,84 @@ if (req.method === "POST" && path === "/runtime/execute") {
         });
       }
 
+      const completedTrainingEventType = "runtime.training.completed";
+
       await writeEvent({
         tenant_id,
         object_id: completedTrainingPlan.person_id,
-        event_type: "runtime.training.completed",
+        event_type: completedTrainingEventType,
         message: `Training completed: ${completedTrainingPlan.competency_name}`
       });
+
+      const autoOrchestrations = [];
+
+      const orchestrationRuleResult = await db.query(`
+        SELECT
+          rule_id,
+          rule_name,
+          orchestration_type,
+          payload_template
+        FROM runtime_orchestration_rules
+        WHERE tenant_id = $1
+          AND source_event_type = $2
+          AND enabled = true
+        ORDER BY rule_name ASC
+      `, [
+        tenant_id,
+        completedTrainingEventType
+      ]);
+
+      for (const rule of orchestrationRuleResult.rows) {
+        const orchestration_id =
+          "orch-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+        const payload = {
+          ...(rule.payload_template || {}),
+          rule_id: rule.rule_id,
+          rule_name: rule.rule_name,
+          competency_name: completedTrainingPlan.competency_name,
+          training_plan_id: completedTrainingPlan.training_plan_id,
+          learning_evidence_id: learningEvidence ? learningEvidence.evidence_id : null
+        };
+
+        await db.query(`
+          INSERT INTO runtime_orchestrations (
+            orchestration_id,
+            tenant_id,
+            source_event_type,
+            source_object_id,
+            orchestration_type,
+            status,
+            payload,
+            created_by
+          )
+          VALUES ($1,$2,$3,$4,$5,'pending',$6,$7)
+        `, [
+          orchestration_id,
+          tenant_id,
+          completedTrainingEventType,
+          completedTrainingPlan.person_id,
+          rule.orchestration_type,
+          JSON.stringify(payload),
+          completed_by
+        ]);
+
+        autoOrchestrations.push({
+          orchestration_id,
+          source_event_type: completedTrainingEventType,
+          source_object_id: completedTrainingPlan.person_id,
+          orchestration_type: rule.orchestration_type,
+          status: "pending",
+          payload
+        });
+
+        await writeEvent({
+          tenant_id,
+          object_id: completedTrainingPlan.person_id,
+          event_type: "runtime.orchestration.auto_created",
+          message: `Auto orchestration created: ${rule.orchestration_type}`
+        });
+      }
 
       return send(res, 200, {
         completed: true,
@@ -1506,7 +1578,9 @@ if (req.method === "POST" && path === "/runtime/execute") {
         competency_updated: updatedCompetency !== null,
         competency: updatedCompetency,
         learning_evidence_created: learningEvidence !== null,
-        learning_evidence: learningEvidence
+        learning_evidence: learningEvidence,
+        auto_orchestrations_created: autoOrchestrations.length,
+        auto_orchestrations: autoOrchestrations
       });
     }
 
@@ -1844,6 +1918,59 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       const executedOrchestration = updateResult.rows[0];
 
+      let recommendationRefreshJob = null;
+
+      if (executedOrchestration.orchestration_type === "LEARNING_RESPONSE") {
+        const refresh_job_id =
+          "job-" + Date.now();
+
+        await db.query(`
+          INSERT INTO runtime_execution_jobs (
+            job_id,
+            tenant_id,
+            object_id,
+            status,
+            requested_by,
+            execution_type,
+            payload,
+            available_at,
+            priority,
+            workflow_id,
+            chain_position
+          )
+          VALUES ($1,$2,$3,'pending',$4,$5,$6,now(),$7,$8,0)
+        `, [
+          refresh_job_id,
+          tenant_id,
+          executedOrchestration.source_object_id,
+          executed_by,
+          "orchestration.LEARNING_RESPONSE.refresh_recommendations",
+          JSON.stringify({
+            orchestration_id: executedOrchestration.orchestration_id,
+            orchestration_type: executedOrchestration.orchestration_type,
+            source_event_type: executedOrchestration.source_event_type,
+            source_object_id: executedOrchestration.source_object_id,
+            payload: executedOrchestration.payload
+          }),
+          100,
+          refresh_job_id
+        ]);
+
+        recommendationRefreshJob = {
+          job_id: refresh_job_id,
+          object_id: executedOrchestration.source_object_id,
+          execution_type: "orchestration.LEARNING_RESPONSE.refresh_recommendations",
+          status: "pending"
+        };
+
+        await writeEvent({
+          tenant_id,
+          object_id: executedOrchestration.source_object_id,
+          event_type: "runtime.orchestration.recommendation_refresh_requested",
+          message: "Recommendation refresh requested by orchestration"
+        });
+      }
+
       await writeEvent({
         tenant_id,
         object_id: executedOrchestration.source_object_id,
@@ -1853,7 +1980,9 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       return send(res, 200, {
         executed: true,
-        orchestration: executedOrchestration
+        orchestration: executedOrchestration,
+        recommendation_refresh_requested: recommendationRefreshJob !== null,
+        recommendation_refresh_job: recommendationRefreshJob
       });
     }
 
