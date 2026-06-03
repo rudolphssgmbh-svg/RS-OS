@@ -1600,6 +1600,93 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // COMPLETE COMMUNICATION EVENT
+
+    if (req.method === "POST" && path.startsWith("/runtime/communications/complete/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const communication_event_id = decodeURIComponent(
+        path.replace("/runtime/communications/complete/", "")
+      );
+
+      if (!communication_event_id) {
+        return send(res, 400, {
+          error: "missing_communication_event_id"
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT *
+        FROM runtime_communication_events
+        WHERE tenant_id = $1
+          AND communication_event_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        communication_event_id
+      ]);
+
+      if (existingResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "communication_event_not_found",
+          communication_event_id
+        });
+      }
+
+      const communicationEvent = existingResult.rows[0];
+
+      if (communicationEvent.status !== "acknowledged") {
+        return send(res, 409, {
+          error: "communication_event_not_acknowledged",
+          communication_event_id,
+          current_status: communicationEvent.status
+        });
+      }
+
+      const completed_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const updateResult = await db.query(`
+        UPDATE runtime_communication_events
+        SET
+          status = 'completed',
+          completed_by = $1,
+          completed_at = now()
+        WHERE tenant_id = $2
+          AND communication_event_id = $3
+        RETURNING *
+      `, [
+        completed_by,
+        tenant_id,
+        communication_event_id
+      ]);
+
+      const completedCommunication = updateResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: completedCommunication.receiver_id,
+        event_type: "runtime.communication.completed",
+        message: `Communication completed: ${completedCommunication.message_type}`
+      });
+
+      return send(res, 200, {
+        completed: true,
+        communication: completedCommunication
+      });
+    }
+
     // SEND COMMUNICATION EVENT
 
     if (req.method === "POST" && path === "/runtime/communications/send") {
