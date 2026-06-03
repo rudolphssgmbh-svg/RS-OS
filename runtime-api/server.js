@@ -1602,6 +1602,136 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // GET COMMUNICATION SUMMARY BY RECEIVER
+
+    if (req.method === "GET" && path.startsWith("/runtime/communication-summary/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const receiver_id = decodeURIComponent(
+        path.replace("/runtime/communication-summary/", "")
+      );
+
+      if (!receiver_id) {
+        return send(res, 400, {
+          error: "missing_receiver_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          communication_evidence_id,
+          communication_event_id,
+          sender_id,
+          receiver_id,
+          message_type,
+          ack_latency_seconds,
+          completion_latency_seconds,
+          effectiveness,
+          created_by,
+          created_at
+        FROM runtime_communication_evidence
+        WHERE tenant_id = $1
+          AND receiver_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        receiver_id
+      ]);
+
+      const evidence_count = result.rows.length;
+      const positive_count = result.rows.filter(row => row.effectiveness === "positive").length;
+      const neutral_count = result.rows.filter(row => row.effectiveness === "neutral").length;
+      const negative_count = result.rows.filter(row => row.effectiveness === "negative").length;
+
+      const avg = (values) => {
+        const usable = values.filter(value => value !== null && value !== undefined);
+        if (usable.length === 0) return null;
+        return Math.round(
+          usable.reduce((sum, value) => sum + Number(value || 0), 0) / usable.length
+        );
+      };
+
+      const average_ack_latency_seconds = avg(
+        result.rows.map(row => row.ack_latency_seconds)
+      );
+
+      const average_completion_latency_seconds = avg(
+        result.rows.map(row => row.completion_latency_seconds)
+      );
+
+      const effectiveness_score =
+        evidence_count > 0
+          ? Math.round((positive_count / evidence_count) * 1000) / 10
+          : 0;
+
+      const byMessageType = {};
+
+      for (const row of result.rows) {
+        if (!byMessageType[row.message_type]) {
+          byMessageType[row.message_type] = {
+            message_type: row.message_type,
+            evidence_count: 0,
+            positive_count: 0,
+            neutral_count: 0,
+            negative_count: 0,
+            average_ack_latency_seconds: null,
+            average_completion_latency_seconds: null,
+            _ack_values: [],
+            _completion_values: []
+          };
+        }
+
+        const entry = byMessageType[row.message_type];
+
+        entry.evidence_count += 1;
+
+        if (row.effectiveness === "positive") entry.positive_count += 1;
+        if (row.effectiveness === "neutral") entry.neutral_count += 1;
+        if (row.effectiveness === "negative") entry.negative_count += 1;
+
+        if (row.ack_latency_seconds !== null && row.ack_latency_seconds !== undefined) {
+          entry._ack_values.push(row.ack_latency_seconds);
+        }
+
+        if (row.completion_latency_seconds !== null && row.completion_latency_seconds !== undefined) {
+          entry._completion_values.push(row.completion_latency_seconds);
+        }
+      }
+
+      for (const entry of Object.values(byMessageType)) {
+        entry.average_ack_latency_seconds = avg(entry._ack_values);
+        entry.average_completion_latency_seconds = avg(entry._completion_values);
+        delete entry._ack_values;
+        delete entry._completion_values;
+      }
+
+      return send(res, 200, {
+        tenant_id,
+        receiver_id,
+        evidence_count,
+        positive_count,
+        neutral_count,
+        negative_count,
+        effectiveness_score,
+        average_ack_latency_seconds,
+        average_completion_latency_seconds,
+        by_message_type: Object.values(byMessageType),
+        evidence: result.rows
+      });
+    }
+
     // GET COMMUNICATION TRACE
 
     if (req.method === "GET" && path.startsWith("/runtime/communications/")) {
