@@ -1510,6 +1510,74 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // GET RUNTIME LEARNING EVIDENCE BY PERSON
+
+    if (req.method === "GET" && path.startsWith("/runtime/learning-evidence/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const person_id = decodeURIComponent(
+        path.replace("/runtime/learning-evidence/", "")
+      );
+
+      if (!person_id) {
+        return send(res, 400, {
+          error: "missing_person_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          evidence_id,
+          person_id,
+          competency_name,
+          training_plan_id,
+          gap_before,
+          gap_after,
+          effectiveness,
+          created_by,
+          created_at
+        FROM runtime_learning_evidence
+        WHERE tenant_id = $1
+          AND person_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        person_id
+      ]);
+
+      const positive_count = result.rows.filter(row => row.effectiveness === "positive").length;
+      const neutral_count = result.rows.filter(row => row.effectiveness === "neutral").length;
+      const negative_count = result.rows.filter(row => row.effectiveness === "negative").length;
+
+      const total_gap_reduction = result.rows.reduce(
+        (sum, row) => sum + Math.max(Number(row.gap_before || 0) - Number(row.gap_after || 0), 0),
+        0
+      );
+
+      return send(res, 200, {
+        tenant_id,
+        person_id,
+        evidence_count: result.rows.length,
+        positive_count,
+        neutral_count,
+        negative_count,
+        total_gap_reduction,
+        evidence: result.rows
+      });
+    }
+
     // GET RUNTIME TRAINING PLANS BY PERSON
 
     if (req.method === "GET" && path.startsWith("/runtime/training-plans/")) {
