@@ -1371,6 +1371,30 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       const completedTrainingPlan = updateResult.rows[0];
 
+      const beforeCompetencyResult = await db.query(`
+        SELECT
+          competency_id,
+          person_id,
+          competency_name,
+          required_level,
+          actual_level,
+          gap
+        FROM runtime_competencies
+        WHERE tenant_id = $1
+          AND person_id = $2
+          AND competency_name = $3
+        LIMIT 1
+      `, [
+        tenant_id,
+        completedTrainingPlan.person_id,
+        completedTrainingPlan.competency_name
+      ]);
+
+      const beforeCompetency =
+        beforeCompetencyResult.rows.length > 0
+          ? beforeCompetencyResult.rows[0]
+          : null;
+
       const competencyUpdateResult = await db.query(`
         UPDATE runtime_competencies
         SET
@@ -1402,12 +1426,70 @@ if (req.method === "POST" && path === "/runtime/execute") {
           ? competencyUpdateResult.rows[0]
           : null;
 
+      let learningEvidence = null;
+
       if (updatedCompetency) {
+        const gapBefore = beforeCompetency ? Number(beforeCompetency.gap || 0) : Number(updatedCompetency.gap || 0);
+        const gapAfter = Number(updatedCompetency.gap || 0);
+
+        let effectiveness = "neutral";
+
+        if (gapAfter < gapBefore) {
+          effectiveness = "positive";
+        } else if (gapAfter > gapBefore) {
+          effectiveness = "negative";
+        }
+
+        const evidence_id =
+          "evd-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+        await db.query(`
+          INSERT INTO runtime_learning_evidence (
+            evidence_id,
+            tenant_id,
+            person_id,
+            competency_name,
+            training_plan_id,
+            gap_before,
+            gap_after,
+            effectiveness,
+            created_by
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `, [
+          evidence_id,
+          tenant_id,
+          updatedCompetency.person_id,
+          updatedCompetency.competency_name,
+          completedTrainingPlan.training_plan_id,
+          gapBefore,
+          gapAfter,
+          effectiveness,
+          completed_by
+        ]);
+
+        learningEvidence = {
+          evidence_id,
+          person_id: updatedCompetency.person_id,
+          competency_name: updatedCompetency.competency_name,
+          training_plan_id: completedTrainingPlan.training_plan_id,
+          gap_before: gapBefore,
+          gap_after: gapAfter,
+          effectiveness
+        };
+
         await writeEvent({
           tenant_id,
           object_id: completedTrainingPlan.person_id,
           event_type: "runtime.competency.improved",
           message: `Competency improved: ${updatedCompetency.competency_name}`
+        });
+
+        await writeEvent({
+          tenant_id,
+          object_id: completedTrainingPlan.person_id,
+          event_type: "runtime.learning.evidence.created",
+          message: `Learning evidence created: ${effectiveness}`
         });
       }
 
@@ -1422,7 +1504,9 @@ if (req.method === "POST" && path === "/runtime/execute") {
         completed: true,
         training_plan: completedTrainingPlan,
         competency_updated: updatedCompetency !== null,
-        competency: updatedCompetency
+        competency: updatedCompetency,
+        learning_evidence_created: learningEvidence !== null,
+        learning_evidence: learningEvidence
       });
     }
 
