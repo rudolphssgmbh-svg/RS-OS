@@ -1601,6 +1601,120 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
+    // GET COMMUNICATION TRACE
+
+    if (req.method === "GET" && path.startsWith("/runtime/communications/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const communication_event_id = decodeURIComponent(
+        path.replace("/runtime/communications/", "")
+      );
+
+      if (!communication_event_id) {
+        return send(res, 400, {
+          error: "missing_communication_event_id"
+        });
+      }
+
+      const communicationResult = await db.query(`
+        SELECT *
+        FROM runtime_communication_events
+        WHERE tenant_id = $1
+          AND communication_event_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        communication_event_id
+      ]);
+
+      if (communicationResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "communication_event_not_found",
+          communication_event_id
+        });
+      }
+
+      const communication = communicationResult.rows[0];
+
+      const auditResult = await db.query(`
+        SELECT
+          event_id,
+          event_type,
+          object_id,
+          message,
+          created_at,
+          audit_hash,
+          previous_hash
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+          AND event_type LIKE 'runtime.communication.%'
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        communication.receiver_id
+      ]);
+
+      const createdAt = communication.created_at ? new Date(communication.created_at).getTime() : null;
+      const acknowledgedAt = communication.acknowledged_at ? new Date(communication.acknowledged_at).getTime() : null;
+      const completedAt = communication.completed_at ? new Date(communication.completed_at).getTime() : null;
+
+      const ack_latency_seconds =
+        createdAt && acknowledgedAt
+          ? Math.round((acknowledgedAt - createdAt) / 1000)
+          : null;
+
+      const completion_latency_seconds =
+        createdAt && completedAt
+          ? Math.round((completedAt - createdAt) / 1000)
+          : null;
+
+      return send(res, 200, {
+        tenant_id,
+        communication_event_id,
+        status: communication.status,
+        sender_id: communication.sender_id,
+        receiver_id: communication.receiver_id,
+        direction: communication.direction,
+        message_type: communication.message_type,
+        subject: communication.subject,
+        payload: communication.payload,
+        tx: {
+          sent: true,
+          sent_by: communication.created_by,
+          sent_at: communication.created_at
+        },
+        ack: {
+          acknowledged: communication.acknowledged_at !== null,
+          acknowledged_by: communication.acknowledged_by,
+          acknowledged_at: communication.acknowledged_at,
+          ack_latency_seconds
+        },
+        result: {
+          completed: communication.completed_at !== null,
+          completed_by: communication.completed_by,
+          completed_at: communication.completed_at,
+          completion_latency_seconds
+        },
+        audit: {
+          event_count: auditResult.rows.length,
+          events: auditResult.rows
+        }
+      });
+    }
+
     // COMPLETE COMMUNICATION EVENT
 
     if (req.method === "POST" && path.startsWith("/runtime/communications/complete/")) {
