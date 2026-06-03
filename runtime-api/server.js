@@ -1811,6 +1811,80 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
       const executedRecommendation = updateResult.rows[0];
 
+      const createdTrainingPlans = [];
+
+      if (executedRecommendation.recommendation_type === "TRAINING_REQUIRED") {
+        const competencyResult = await db.query(`
+          SELECT
+            competency_id,
+            competency_name,
+            gap
+          FROM runtime_competencies
+          WHERE tenant_id = $1
+            AND person_id = $2
+            AND gap > 0
+          ORDER BY gap DESC, competency_name ASC
+        `, [
+          tenant_id,
+          executedRecommendation.object_id
+        ]);
+
+        for (const competency of competencyResult.rows) {
+          const gap = Number(competency.gap || 0);
+
+          let training_type = "MICRO_LEARNING";
+          let estimated_duration_minutes = 15;
+
+          if (gap === 2) {
+            training_type = "MICRO_LEARNING";
+            estimated_duration_minutes = 30;
+          } else if (gap === 3) {
+            training_type = "COACHING";
+            estimated_duration_minutes = 60;
+          } else if (gap >= 4) {
+            training_type = "FORMAL_TRAINING";
+            estimated_duration_minutes = 120;
+          }
+
+          const training_plan_id =
+            "trn-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+          await db.query(`
+            INSERT INTO runtime_training_plans (
+              training_plan_id,
+              tenant_id,
+              person_id,
+              competency_name,
+              recommendation_id,
+              training_type,
+              estimated_duration_minutes,
+              status,
+              created_by
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,'planned',$8)
+          `, [
+            training_plan_id,
+            tenant_id,
+            executedRecommendation.object_id,
+            competency.competency_name,
+            executedRecommendation.recommendation_id,
+            training_type,
+            estimated_duration_minutes,
+            requested_by
+          ]);
+
+          createdTrainingPlans.push({
+            training_plan_id,
+            person_id: executedRecommendation.object_id,
+            competency_name: competency.competency_name,
+            gap,
+            training_type,
+            estimated_duration_minutes,
+            status: "planned"
+          });
+        }
+      }
+
       await writeEvent({
         tenant_id,
         object_id: executedRecommendation.object_id,
@@ -1822,6 +1896,8 @@ if (req.method === "POST" && path === "/runtime/execute") {
         executed: true,
         job_id,
         execution_type,
+        training_plans_created: createdTrainingPlans.length,
+        training_plans: createdTrainingPlans,
         recommendation: executedRecommendation
       });
     }
