@@ -1683,6 +1683,93 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
+    // APPROVE RUNTIME ORCHESTRATION
+
+    if (req.method === "POST" && path.startsWith("/runtime/orchestrations/approve/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const orchestration_id = decodeURIComponent(
+        path.replace("/runtime/orchestrations/approve/", "")
+      );
+
+      if (!orchestration_id) {
+        return send(res, 400, {
+          error: "missing_orchestration_id"
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT *
+        FROM runtime_orchestrations
+        WHERE tenant_id = $1
+          AND orchestration_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        orchestration_id
+      ]);
+
+      if (existingResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "orchestration_not_found",
+          orchestration_id
+        });
+      }
+
+      const orchestration = existingResult.rows[0];
+
+      if (orchestration.status !== "pending") {
+        return send(res, 409, {
+          error: "orchestration_not_pending",
+          orchestration_id,
+          current_status: orchestration.status
+        });
+      }
+
+      const approved_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const updateResult = await db.query(`
+        UPDATE runtime_orchestrations
+        SET
+          status = 'approved',
+          approved_by = $1,
+          approved_at = now()
+        WHERE tenant_id = $2
+          AND orchestration_id = $3
+        RETURNING *
+      `, [
+        approved_by,
+        tenant_id,
+        orchestration_id
+      ]);
+
+      const approvedOrchestration = updateResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: approvedOrchestration.source_object_id,
+        event_type: "runtime.orchestration.approved",
+        message: `Orchestration approved: ${approvedOrchestration.orchestration_type}`
+      });
+
+      return send(res, 200, {
+        approved: true,
+        orchestration: approvedOrchestration
+      });
+    }
+
     // GET RUNTIME ORCHESTRATIONS
 
     if (req.method === "GET" && path === "/runtime/orchestrations") {
