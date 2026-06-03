@@ -1513,6 +1513,93 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // ACKNOWLEDGE COMMUNICATION EVENT
+
+    if (req.method === "POST" && path.startsWith("/runtime/communications/ack/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const communication_event_id = decodeURIComponent(
+        path.replace("/runtime/communications/ack/", "")
+      );
+
+      if (!communication_event_id) {
+        return send(res, 400, {
+          error: "missing_communication_event_id"
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT *
+        FROM runtime_communication_events
+        WHERE tenant_id = $1
+          AND communication_event_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        communication_event_id
+      ]);
+
+      if (existingResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "communication_event_not_found",
+          communication_event_id
+        });
+      }
+
+      const communicationEvent = existingResult.rows[0];
+
+      if (communicationEvent.status !== "sent") {
+        return send(res, 409, {
+          error: "communication_event_not_sent",
+          communication_event_id,
+          current_status: communicationEvent.status
+        });
+      }
+
+      const acknowledged_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const updateResult = await db.query(`
+        UPDATE runtime_communication_events
+        SET
+          status = 'acknowledged',
+          acknowledged_by = $1,
+          acknowledged_at = now()
+        WHERE tenant_id = $2
+          AND communication_event_id = $3
+        RETURNING *
+      `, [
+        acknowledged_by,
+        tenant_id,
+        communication_event_id
+      ]);
+
+      const acknowledgedCommunication = updateResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: acknowledgedCommunication.receiver_id,
+        event_type: "runtime.communication.acknowledged",
+        message: `Communication acknowledged: ${acknowledgedCommunication.message_type}`
+      });
+
+      return send(res, 200, {
+        acknowledged: true,
+        communication: acknowledgedCommunication
+      });
+    }
+
     // SEND COMMUNICATION EVENT
 
     if (req.method === "POST" && path === "/runtime/communications/send") {
