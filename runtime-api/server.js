@@ -1682,6 +1682,59 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // GET RUNTIME ORCHESTRATIONS
+
+    if (req.method === "GET" && path === "/runtime/orchestrations") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT
+          orchestration_id,
+          tenant_id,
+          source_event_type,
+          source_object_id,
+          orchestration_type,
+          status,
+          payload,
+          created_by,
+          created_at,
+          approved_by,
+          approved_at,
+          executed_by,
+          executed_at,
+          completed_by,
+          completed_at
+        FROM runtime_orchestrations
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        tenant_id,
+        orchestration_count: result.rows.length,
+        pending_count: result.rows.filter(row => row.status === "pending").length,
+        approved_count: result.rows.filter(row => row.status === "approved").length,
+        executed_count: result.rows.filter(row => row.status === "executed").length,
+        completed_count: result.rows.filter(row => row.status === "completed").length,
+        cancelled_count: result.rows.filter(row => row.status === "cancelled").length,
+        orchestrations: result.rows
+      });
+    }
+
     // GET COMMUNICATION SUMMARY BY RECEIVER
 
     if (req.method === "GET" && path.startsWith("/runtime/communication-summary/")) {
