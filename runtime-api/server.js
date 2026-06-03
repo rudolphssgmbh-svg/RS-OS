@@ -1857,6 +1857,93 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // COMPLETE RUNTIME ORCHESTRATION
+
+    if (req.method === "POST" && path.startsWith("/runtime/orchestrations/complete/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const orchestration_id = decodeURIComponent(
+        path.replace("/runtime/orchestrations/complete/", "")
+      );
+
+      if (!orchestration_id) {
+        return send(res, 400, {
+          error: "missing_orchestration_id"
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT *
+        FROM runtime_orchestrations
+        WHERE tenant_id = $1
+          AND orchestration_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        orchestration_id
+      ]);
+
+      if (existingResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "orchestration_not_found",
+          orchestration_id
+        });
+      }
+
+      const orchestration = existingResult.rows[0];
+
+      if (orchestration.status !== "executed") {
+        return send(res, 409, {
+          error: "orchestration_not_executed",
+          orchestration_id,
+          current_status: orchestration.status
+        });
+      }
+
+      const completed_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const updateResult = await db.query(`
+        UPDATE runtime_orchestrations
+        SET
+          status = 'completed',
+          completed_by = $1,
+          completed_at = now()
+        WHERE tenant_id = $2
+          AND orchestration_id = $3
+        RETURNING *
+      `, [
+        completed_by,
+        tenant_id,
+        orchestration_id
+      ]);
+
+      const completedOrchestration = updateResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: completedOrchestration.source_object_id,
+        event_type: "runtime.orchestration.completed",
+        message: `Orchestration completed: ${completedOrchestration.orchestration_type}`
+      });
+
+      return send(res, 200, {
+        completed: true,
+        orchestration: completedOrchestration
+      });
+    }
+
     // GET RUNTIME ORCHESTRATIONS
 
     if (req.method === "GET" && path === "/runtime/orchestrations") {
