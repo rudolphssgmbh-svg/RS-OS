@@ -1511,6 +1511,105 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
+    // GET RUNTIME LEARNING SUMMARY BY PERSON
+
+    if (req.method === "GET" && path.startsWith("/runtime/learning-summary/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const person_id = decodeURIComponent(
+        path.replace("/runtime/learning-summary/", "")
+      );
+
+      if (!person_id) {
+        return send(res, 400, {
+          error: "missing_person_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          competency_name,
+          effectiveness,
+          gap_before,
+          gap_after,
+          created_at
+        FROM runtime_learning_evidence
+        WHERE tenant_id = $1
+          AND person_id = $2
+        ORDER BY created_at DESC
+      `, [
+        tenant_id,
+        person_id
+      ]);
+
+      const evidence_count = result.rows.length;
+      const positive_count = result.rows.filter(row => row.effectiveness === "positive").length;
+      const neutral_count = result.rows.filter(row => row.effectiveness === "neutral").length;
+      const negative_count = result.rows.filter(row => row.effectiveness === "negative").length;
+
+      const total_gap_reduction = result.rows.reduce(
+        (sum, row) => sum + Math.max(Number(row.gap_before || 0) - Number(row.gap_after || 0), 0),
+        0
+      );
+
+      const effectiveness_score =
+        evidence_count > 0
+          ? Math.round((positive_count / evidence_count) * 1000) / 10
+          : 0;
+
+      const byCompetency = {};
+
+      for (const row of result.rows) {
+        if (!byCompetency[row.competency_name]) {
+          byCompetency[row.competency_name] = {
+            competency_name: row.competency_name,
+            evidence_count: 0,
+            positive_count: 0,
+            neutral_count: 0,
+            negative_count: 0,
+            gap_reduction: 0
+          };
+        }
+
+        const entry = byCompetency[row.competency_name];
+
+        entry.evidence_count += 1;
+
+        if (row.effectiveness === "positive") entry.positive_count += 1;
+        if (row.effectiveness === "neutral") entry.neutral_count += 1;
+        if (row.effectiveness === "negative") entry.negative_count += 1;
+
+        entry.gap_reduction += Math.max(
+          Number(row.gap_before || 0) - Number(row.gap_after || 0),
+          0
+        );
+      }
+
+      return send(res, 200, {
+        tenant_id,
+        person_id,
+        evidence_count,
+        positive_count,
+        neutral_count,
+        negative_count,
+        total_gap_reduction,
+        effectiveness_score,
+        competencies: Object.values(byCompetency)
+      });
+    }
+
     // GET RUNTIME LEARNING EVIDENCE BY PERSON
 
     if (req.method === "GET" && path.startsWith("/runtime/learning-evidence/")) {
