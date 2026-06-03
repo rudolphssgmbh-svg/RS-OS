@@ -4284,6 +4284,73 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
+    // CREATE RELATION
+
+    if (req.method === "POST" && path === "/runtime/relations") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = auth.user.tenant_id;
+
+      const source_object_id = body.source_object_id;
+      const target_object_id = body.target_object_id;
+      const relation_type = body.relation_type;
+
+      if (!source_object_id || !target_object_id || !relation_type) {
+        return send(res, 400, {
+          error: "missing_required_relation_fields"
+        });
+      }
+
+      const relation_id =
+        "rel-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      await db.query(`
+        INSERT INTO runtime_relations (
+          relation_id,
+          tenant_id,
+          source_object_id,
+          target_object_id,
+          relation_type
+        )
+        VALUES ($1,$2,$3,$4,$5)
+      `, [
+        relation_id,
+        tenant_id,
+        source_object_id,
+        target_object_id,
+        relation_type
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: source_object_id,
+        event_type: "runtime.relation.created",
+        message: `Relation created: ${source_object_id} ${relation_type} ${target_object_id}`
+      });
+
+      return send(res, 200, {
+        created: true,
+        relation: {
+          relation_id,
+          tenant_id,
+          source_object_id,
+          target_object_id,
+          relation_type
+        }
+      });
+    }
+
     // GET RELATIONS
 
     if (req.method === "GET" && path === "/runtime/relations") {
