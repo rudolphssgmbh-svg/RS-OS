@@ -4776,6 +4776,25 @@ async function updateWorkflowState(
           throw new Error("Simulated diagnostic failure");
         }
 
+        if (
+          job.execution_type ===
+          "orchestration.LEARNING_RESPONSE.refresh_recommendations"
+        ) {
+          await writeEvent({
+            event_type: "runtime.recommendations.refresh.started",
+            object_id: job.object_id,
+            message: "Recommendation refresh started by orchestration worker",
+            tenant_id
+          });
+
+          await writeEvent({
+            event_type: "runtime.recommendations.refresh.completed",
+            object_id: job.object_id,
+            message: "Recommendation refresh completed by orchestration worker",
+            tenant_id
+          });
+        }
+
         await db.query(`
           UPDATE runtime_execution_jobs
           SET
