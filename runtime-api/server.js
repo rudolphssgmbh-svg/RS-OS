@@ -1512,6 +1512,89 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // SEND COMMUNICATION EVENT
+
+    if (req.method === "POST" && path === "/runtime/communications/send") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = auth.user.tenant_id;
+
+      const sender_id = body.sender_id;
+      const receiver_id = body.receiver_id;
+      const direction = body.direction || "TX";
+      const message_type = body.message_type || "MESSAGE";
+      const subject = body.subject || null;
+      const payload = body.payload || {};
+
+      if (!sender_id || !receiver_id) {
+        return send(res, 400, {
+          error: "missing_sender_or_receiver"
+        });
+      }
+
+      const communication_event_id =
+        "com-" + Date.now() + "-" + Math.random().toString(36).slice(2,8);
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      await db.query(`
+        INSERT INTO runtime_communication_events (
+          communication_event_id,
+          tenant_id,
+          sender_id,
+          receiver_id,
+          direction,
+          message_type,
+          subject,
+          payload,
+          status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'sent',$9)
+      `, [
+        communication_event_id,
+        tenant_id,
+        sender_id,
+        receiver_id,
+        direction,
+        message_type,
+        subject,
+        JSON.stringify(payload),
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: receiver_id,
+        event_type: "runtime.communication.sent",
+        message: `Communication sent: ${message_type}`
+      });
+
+      return send(res, 200, {
+        sent: true,
+        communication_event_id,
+        tenant_id,
+        sender_id,
+        receiver_id,
+        direction,
+        message_type,
+        subject,
+        status: "sent"
+      });
+    }
+
     // GET RUNTIME LEARNING SUMMARY BY PERSON
 
     if (req.method === "GET" && path.startsWith("/runtime/learning-summary/")) {
