@@ -576,6 +576,13 @@ const server = http.createServer(async (req, res) => {
           tenant_id: "tenant-rudolph"
         },
         {
+          operator_id: "psgarage-admin",
+          username: "psgarage-admin",
+          password: process.env.RUNTIME_ADMIN_PASSWORD,
+          role: "runtime_admin",
+          tenant_id: "tenant-psgarage"
+        },
+        {
           operator_id: "qm_operator",
           username: "qm",
           password: process.env.QM_PASSWORD,
