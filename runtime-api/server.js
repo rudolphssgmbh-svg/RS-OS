@@ -5786,6 +5786,124 @@ if (req.method === "POST" && path === "/runtime/execute") {
       }
     }
 
+
+    // RSOS-050E Global Tenant Control API - Create Tenant Member
+    if (req.method === "POST" && path.startsWith("/runtime/admin/tenants/") && path.endsWith("/members")) {
+
+      const auth = requireRole(req, [
+        "system_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      if (auth.user.scope !== "global") {
+        return send(res, 403, {
+          error: "global_scope_required"
+        });
+      }
+
+      const tenant_id = decodeURIComponent(
+        path
+          .replace("/runtime/admin/tenants/", "")
+          .replace("/members", "")
+      );
+
+      const body = await readBody(req);
+
+      const username = body.username;
+      const display_name = body.display_name || username;
+      const email = body.email || null;
+      const role = body.role || "tenant_admin";
+      const status = body.status || "active";
+
+      if (!tenant_id || !username) {
+        return send(res, 400, {
+          error: "missing_required_member_fields",
+          required: [
+            "tenant_id",
+            "username"
+          ]
+        });
+      }
+
+      const tenantResult = await db.query(`
+        SELECT tenant_id
+        FROM runtime_tenants
+        WHERE tenant_id = $1
+        LIMIT 1
+      `, [tenant_id]);
+
+      if (tenantResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "tenant_not_found",
+          tenant_id
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT member_id
+        FROM runtime_tenant_members
+        WHERE tenant_id = $1
+          AND username = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        username
+      ]);
+
+      if (existingResult.rows.length > 0) {
+        return send(res, 409, {
+          error: "tenant_member_already_exists",
+          tenant_id,
+          username
+        });
+      }
+
+      const member_id =
+        "mem-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "system_admin";
+
+      const insertResult = await db.query(`
+        INSERT INTO runtime_tenant_members (
+          member_id,
+          tenant_id,
+          username,
+          display_name,
+          email,
+          role,
+          status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING *
+      `, [
+        member_id,
+        tenant_id,
+        username,
+        display_name,
+        email,
+        role,
+        status,
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: tenant_id,
+        event_type: "runtime.admin.tenant_member.created",
+        message: "Tenant member created: " + username
+      });
+
+      return send(res, 200, {
+        created: true,
+        member: insertResult.rows[0]
+      });
+    }
+
     // RSOS-050B Global Tenant Control API - Tenant List
     if (req.method === "GET" && path === "/runtime/admin/tenants") {
 
