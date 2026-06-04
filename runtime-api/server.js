@@ -1468,7 +1468,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
         return send(res, auth.code, auth.response);
       }
 
-      //onst tenant_id = auth.user.tenant_id;
+
 
       const result = await db.query(`
         SELECT *
