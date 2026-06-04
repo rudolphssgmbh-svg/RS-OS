@@ -2840,6 +2840,51 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
     // GET RUNTIME COMPETENCIES BY PERSON
 
+    // RSOS-049B Competency Gap Summary
+    if (req.method === "GET" && path === "/runtime/competencies/gaps") {
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT
+          person_id,
+          competency_name,
+          required_level,
+          actual_level,
+          gap,
+          created_at,
+          updated_at
+        FROM runtime_competencies
+        WHERE tenant_id = $1
+        ORDER BY gap DESC, competency_name ASC
+      `, [tenant_id]);
+
+      const summaryResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS competency_count,
+          COALESCE(SUM(gap), 0)::int AS total_gap,
+          COALESCE(MAX(gap), 0)::int AS max_gap,
+          COUNT(*) FILTER (WHERE gap > 0)::int AS open_gap_count,
+          COUNT(*) FILTER (WHERE gap >= 3)::int AS critical_gap_count
+        FROM runtime_competencies
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        tenant_id,
+        summary: summaryResult.rows[0],
+        gaps: result.rows
+      });
+    }
+
     if (req.method === "GET" && path.startsWith("/runtime/competencies/")) {
 
       const auth = requireRole(req, [
@@ -5313,6 +5358,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
     // GET RUNTIME TENANTS
+
 
 
 

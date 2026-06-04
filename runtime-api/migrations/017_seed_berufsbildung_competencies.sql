@@ -1,0 +1,92 @@
+INSERT INTO runtime_competencies (
+  competency_id,
+  tenant_id,
+  person_id,
+  competency_name,
+  required_level,
+  actual_level,
+  gap,
+  created_by
+)
+VALUES
+(
+  'comp-bbs-demo-001-sachkunde-34a',
+  'tenant-berufsbildung-sicherheit',
+  'person-bbs-demo-001',
+  'Sachkunde §34a',
+  5,
+  2,
+  3,
+  'system'
+),
+(
+  'comp-bbs-demo-001-unterrichtung-34a',
+  'tenant-berufsbildung-sicherheit',
+  'person-bbs-demo-001',
+  'Unterrichtung §34a',
+  4,
+  3,
+  1,
+  'system'
+),
+(
+  'comp-bbs-demo-001-brandschutzhelfer',
+  'tenant-berufsbildung-sicherheit',
+  'person-bbs-demo-001',
+  'Brandschutzhelfer',
+  3,
+  1,
+  2,
+  'system'
+),
+(
+  'comp-bbs-demo-001-erste-hilfe',
+  'tenant-berufsbildung-sicherheit',
+  'person-bbs-demo-001',
+  'Erste Hilfe',
+  3,
+  0,
+  3,
+  'system'
+),
+(
+  'comp-bbs-demo-001-aevo',
+  'tenant-berufsbildung-sicherheit',
+  'person-bbs-demo-001',
+  'AEVO',
+  4,
+  1,
+  3,
+  'system'
+),
+(
+  'comp-bbs-demo-001-gssk',
+  'tenant-berufsbildung-sicherheit',
+  'person-bbs-demo-001',
+  'GSSK',
+  5,
+  0,
+  5,
+  'system'
+),
+(
+  'comp-bbs-demo-001-fss',
+  'tenant-berufsbildung-sicherheit',
+  'person-bbs-demo-001',
+  'FSS',
+  5,
+  0,
+  5,
+  'system'
+),
+(
+  'comp-bbs-demo-001-meister-schutz-sicherheit',
+  'tenant-berufsbildung-sicherheit',
+  'person-bbs-demo-001',
+  'Meister Schutz und Sicherheit',
+  5,
+  0,
+  5,
+  'system'
+)
+ON CONFLICT (competency_id) DO NOTHING;
