@@ -5279,6 +5279,206 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+    // CREATE RUNTIME TENANT
+
+    if (req.method === "POST" && path === "/runtime/tenants") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id;
+      const tenant_name = body.tenant_name;
+      const tenant_type = body.tenant_type || "business";
+      const status = body.status || "active";
+      const owner_name = body.owner_name || null;
+      const owner_email = body.owner_email || null;
+
+      if (!tenant_id || !tenant_name) {
+        return send(res, 400, {
+          error: "missing_required_tenant_fields",
+          required: [
+            "tenant_id",
+            "tenant_name"
+          ]
+        });
+      }
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const existingResult = await db.query(`
+        SELECT tenant_id
+        FROM runtime_tenants
+        WHERE tenant_id = $1
+        LIMIT 1
+      `, [
+        tenant_id
+      ]);
+
+      if (existingResult.rows.length > 0) {
+        return send(res, 409, {
+          error: "tenant_already_exists",
+          tenant_id
+        });
+      }
+
+      const insertResult = await db.query(`
+        INSERT INTO runtime_tenants (
+          tenant_id,
+          tenant_name,
+          tenant_type,
+          status,
+          owner_name,
+          owner_email,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        RETURNING *
+      `, [
+        tenant_id,
+        tenant_name,
+        tenant_type,
+        status,
+        owner_name,
+        owner_email,
+        created_by
+      ]);
+
+      const tenant = insertResult.rows[0];
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: tenant.tenant_id,
+        event_type: "runtime.tenant.created",
+        message: `Tenant created: ${tenant.tenant_name}`
+      });
+
+      return send(res, 200, {
+        created: true,
+        tenant
+      });
+    }
+
+
+    // CREATE RUNTIME TENANT DOMAIN
+
+    if (req.method === "POST" && path.startsWith("/runtime/tenants/") && path.endsWith("/domains")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = decodeURIComponent(
+        path
+          .replace("/runtime/tenants/", "")
+          .replace("/domains", "")
+      );
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "missing_tenant_id"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const domain_name = body.domain_name;
+      const domain_role = body.domain_role || "primary";
+      const status = body.status || "active";
+
+      if (!domain_name) {
+        return send(res, 400, {
+          error: "missing_domain_name"
+        });
+      }
+
+      const tenantResult = await db.query(`
+        SELECT tenant_id
+        FROM runtime_tenants
+        WHERE tenant_id = $1
+        LIMIT 1
+      `, [
+        tenant_id
+      ]);
+
+      if (tenantResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "tenant_not_found",
+          tenant_id
+        });
+      }
+
+      const existingDomainResult = await db.query(`
+        SELECT domain_id, tenant_id, domain_name
+        FROM runtime_tenant_domains
+        WHERE domain_name = $1
+        LIMIT 1
+      `, [
+        domain_name
+      ]);
+
+      if (existingDomainResult.rows.length > 0) {
+        return send(res, 409, {
+          error: "domain_already_exists",
+          domain: existingDomainResult.rows[0]
+        });
+      }
+
+      const domain_id =
+        "dom-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const insertResult = await db.query(`
+        INSERT INTO runtime_tenant_domains (
+          domain_id,
+          tenant_id,
+          domain_name,
+          domain_role,
+          status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING *
+      `, [
+        domain_id,
+        tenant_id,
+        domain_name,
+        domain_role,
+        status,
+        created_by
+      ]);
+
+      const domain = insertResult.rows[0];
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: tenant_id,
+        event_type: "runtime.tenant.domain.created",
+        message: `Tenant domain created: ${domain.domain_name}`
+      });
+
+      return send(res, 200, {
+        created: true,
+        domain
+      });
+    }
+
     // GET RUNTIME TENANTS
 
     if (req.method === "GET" && path === "/runtime/tenants") {
