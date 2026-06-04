@@ -5904,6 +5904,138 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // RSOS-050F Global Tenant Control API - Create Credential
+    if (req.method === "POST" && path.startsWith("/runtime/admin/tenants/") && path.endsWith("/credentials")) {
+
+      const auth = requireRole(req, [
+        "system_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      if (auth.user.scope !== "global") {
+        return send(res, 403, {
+          error: "global_scope_required"
+        });
+      }
+
+      const tenant_id = decodeURIComponent(
+        path
+          .replace("/runtime/admin/tenants/", "")
+          .replace("/credentials", "")
+      );
+
+      const body = await readBody(req);
+
+      const username = body.username;
+      const password = body.password;
+      const status = body.status || "active";
+      const scope = body.scope || "tenant";
+      const system_role = body.system_role || null;
+
+      if (!tenant_id || !username || !password) {
+        return send(res, 400, {
+          error: "missing_required_credential_fields",
+          required: [
+            "tenant_id",
+            "username",
+            "password"
+          ]
+        });
+      }
+
+      const memberResult = await db.query(`
+        SELECT member_id, role, status
+        FROM runtime_tenant_members
+        WHERE tenant_id = $1
+          AND username = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        username
+      ]);
+
+      if (memberResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "tenant_member_not_found",
+          tenant_id,
+          username
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT credential_id
+        FROM runtime_operator_credentials
+        WHERE tenant_id = $1
+          AND username = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        username
+      ]);
+
+      if (existingResult.rows.length > 0) {
+        return send(res, 409, {
+          error: "credential_already_exists",
+          tenant_id,
+          username
+        });
+      }
+
+      const credential_id =
+        "cred-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "system_admin";
+
+      const insertResult = await db.query(`
+        INSERT INTO runtime_operator_credentials (
+          credential_id,
+          tenant_id,
+          username,
+          password,
+          status,
+          created_by,
+          scope,
+          system_role
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING
+          credential_id,
+          tenant_id,
+          username,
+          status,
+          created_by,
+          created_at,
+          scope,
+          system_role
+      `, [
+        credential_id,
+        tenant_id,
+        username,
+        password,
+        status,
+        created_by,
+        scope,
+        system_role
+      ]);
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: tenant_id,
+        event_type: "runtime.admin.tenant_credential.created",
+        message: "Tenant credential created: " + username
+      });
+
+      return send(res, 200, {
+        created: true,
+        credential: insertResult.rows[0]
+      });
+    }
+
     // RSOS-050B Global Tenant Control API - Tenant List
     if (req.method === "GET" && path === "/runtime/admin/tenants") {
 
