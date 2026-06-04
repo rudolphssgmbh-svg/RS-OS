@@ -567,64 +567,56 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const operators = [
-        {
-          operator_id: "janette",
-          username: "janette",
-          password: process.env.RUNTIME_ADMIN_PASSWORD,
-          role: "runtime_admin",
-          tenant_id: "tenant-rudolph"
-        },
-        {
-          operator_id: "psgarage-admin",
-          username: "psgarage-admin",
-          password: process.env.RUNTIME_ADMIN_PASSWORD,
-          role: "runtime_admin",
-          tenant_id: "tenant-psgarage"
-        },
-        {
-          operator_id: "qm_operator",
-          username: "qm",
-          password: process.env.QM_PASSWORD,
-          role: "qm",
-          tenant_id: "tenant-rudolph"
-        },
-        {
-          operator_id: "finance_operator",
-          username: "finance",
-          password: process.env.FINANCE_PASSWORD,
-          role: "finance",
-          tenant_id: "tenant-rudolph"
-        },
-        {
-          operator_id: "auditor",
-          username: "auditor",
-          password: process.env.AUDIT_PASSWORD,
-          role: "auditor",
-          tenant_id: "tenant-rudolph"
-        }
-      ];
+      const username = body.username;
+      const password = body.password;
 
-      const operator = operators.find(o =>
-        o.username === body.username &&
-        o.password === body.password
-      );
+      if (!username || !password) {
+        return send(res, 400, {
+          authenticated: false,
+          error: "missing_credentials"
+        });
+      }
 
-      if (!operator) {
+      const credentialResult = await db.query(`
+        SELECT
+          c.username,
+          c.tenant_id,
+          m.role,
+          m.status AS member_status,
+          c.status AS credential_status
+        FROM runtime_operator_credentials c
+        JOIN runtime_tenant_members m
+          ON m.tenant_id = c.tenant_id
+         AND m.username = c.username
+        WHERE c.username = $1
+          AND c.password = $2
+          AND c.status = 'active'
+          AND m.status = 'active'
+        LIMIT 1
+      `, [
+        username,
+        password
+      ]);
 
+      if (credentialResult.rows.length === 0) {
         return send(res, 401, {
           authenticated: false,
           error: "invalid_credentials"
         });
       }
 
-      const operatorCertValid = verifyOperatorSignature(
-        "/app/operators/janette.operator.json",
-        "/app/operators/janette.operator.sig"
-      );
+      const credential = credentialResult.rows[0];
+
+      const operator = {
+        operator_id: credential.username,
+        username: credential.username,
+        role: credential.role === "tenant_admin" ? "runtime_admin" : credential.role,
+        tenant_id: credential.tenant_id
+      };
+
+      const operatorCertValid = verifyOperatorSignature();
 
       if (!operatorCertValid) {
-
         return send(res, 403, {
           authenticated: false,
           error: "operator_certificate_invalid"
@@ -642,493 +634,6 @@ const server = http.createServer(async (req, res) => {
           tenant_id: operator.tenant_id
         },
         token
-      });
-    }
-
-
-    // GOVERNANCE CHECK
-
-    if (req.method === "POST" && path === "/governance/check") {
-
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "auditor"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-      const body = await readBody(req);
-      const object_id = body.object_id;
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const objectResult = await db.query(`
-        SELECT *
-        FROM runtime_objects
-        WHERE tenant_id = $1
-          AND object_id = $2
-        LIMIT 1
-      `, [
-        tenant_id,
-        object_id
-      ]);
-
-      if (objectResult.rows.length === 0) {
-        return send(res, 404, {
-          error: "object_not_found",
-          object_id
-        });
-      }
-
-      const object = objectResult.rows[0];
-
-      const risksResult = await db.query(`
-        SELECT *
-        FROM runtime_risks
-        WHERE tenant_id = $1
-          AND object_id = $2
-        ORDER BY risk_score DESC, created_at DESC
-      `, [
-        tenant_id,
-        object_id
-      ]);
-
-      const actionsResult = await db.query(`
-        SELECT *
-        FROM runtime_actions
-        WHERE tenant_id = $1
-          AND object_id = $2
-          AND status NOT IN ('completed', 'cancelled', 'rejected')
-        ORDER BY created_at DESC
-      `, [
-        tenant_id,
-        object_id
-      ]);
-
-      const relationsResult = await db.query(`
-        SELECT *
-        FROM runtime_relations
-        WHERE tenant_id = $1
-          AND (
-            source_object_id = $2
-            OR target_object_id = $2
-          )
-        ORDER BY created_at DESC
-      `, [
-        tenant_id,
-        object_id
-      ]);
-
-      const eventResult = await db.query(`
-        SELECT COUNT(*)::int AS event_count
-        FROM runtime_events
-        WHERE tenant_id = $1
-          AND object_id = $2
-      `, [
-        tenant_id,
-        object_id
-      ]);
-
-      const objectRiskScore = Number(object.risk_score || 0);
-
-      const maxRiskScore = risksResult.rows.reduce((max, risk) => {
-        return Math.max(max, Number(risk.risk_score || 0));
-      }, objectRiskScore);
-
-      const hasAcuteRisk = risksResult.rows.some(risk =>
-        risk.risk_state === "acute"
-      );
-
-      const highOpenActions = actionsResult.rows.filter(action =>
-        action.priority === "high" || action.priority === "critical"
-      );
-
-      const reason_codes = [];
-
-      let governance_status = "allow";
-
-      if (maxRiskScore >= 70 || hasAcuteRisk) {
-        governance_status = "blocked";
-        reason_codes.push("HIGH_OR_ACUTE_RISK");
-      } else if (maxRiskScore >= 40) {
-        governance_status = "review_required";
-        reason_codes.push("ELEVATED_RISK_SCORE");
-      }
-
-      if (highOpenActions.length > 0 && governance_status !== "blocked") {
-        governance_status = "review_required";
-        reason_codes.push("OPEN_HIGH_PRIORITY_ACTIONS");
-      }
-
-      if (reason_codes.length === 0) {
-        reason_codes.push("NO_GOVERNANCE_BLOCKER_FOUND");
-      }
-
-      const governanceResponse = {
-        object_id,
-        tenant_id,
-        governance_status,
-        reason_codes,
-        object: {
-          runtime_type: object.runtime_type,
-          state: object.state,
-          priority: object.priority,
-          risk_score: objectRiskScore
-        },
-        risk_summary: {
-          risk_count: risksResult.rows.length,
-          max_risk_score: maxRiskScore,
-          acute_risk_count: risksResult.rows.filter(r => r.risk_state === "acute").length
-        },
-        action_summary: {
-          open_action_count: actionsResult.rows.length,
-          high_open_action_count: highOpenActions.length
-        },
-        graph_summary: {
-          direct_edge_count: relationsResult.rows.length
-        },
-        audit_summary: {
-          event_count: eventResult.rows[0].event_count
-        }
-      };
-
-      const decision_id =
-        `gov-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      await db.query(`
-        INSERT INTO runtime_governance_decisions
-        (
-          decision_id,
-          object_id,
-          tenant_id,
-          governance_status,
-          reason_codes,
-          risk_count,
-          max_risk_score,
-          acute_risk_count,
-          open_action_count,
-          high_open_action_count,
-          graph_edge_count,
-          audit_event_count
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-      `, [
-        decision_id,
-        object_id,
-        tenant_id,
-        governance_status,
-        JSON.stringify(reason_codes),
-        governanceResponse.risk_summary.risk_count,
-        governanceResponse.risk_summary.max_risk_score,
-        governanceResponse.risk_summary.acute_risk_count,
-        governanceResponse.action_summary.open_action_count,
-        governanceResponse.action_summary.high_open_action_count,
-        governanceResponse.graph_summary.direct_edge_count,
-        governanceResponse.audit_summary.event_count
-      ]);
-
-      governanceResponse.decision_id = decision_id;
-
-      await writeEvent({
-        event_type: "runtime.governance.checked",
-        object_id,
-        message: `Governance check result: ${governance_status}`,
-        tenant_id
-      });
-
-      return send(res, 200, governanceResponse);
-    }
-
-
-    // GOVERNANCE DASHBOARD
-
-    if (req.method === "GET" && path === "/governance/dashboard") {
-
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "auditor"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const decisionsResult = await db.query(`
-        SELECT *
-        FROM runtime_governance_decisions
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-        LIMIT 50
-      `, [tenant_id]);
-
-      const totalResult = await db.query(`
-        SELECT COUNT(*)::int AS total_checks
-        FROM runtime_governance_decisions
-        WHERE tenant_id = $1
-      `, [tenant_id]);
-
-      const statusResult = await db.query(`
-        SELECT governance_status, COUNT(*)::int AS count
-        FROM runtime_governance_decisions
-        WHERE tenant_id = $1
-        GROUP BY governance_status
-      `, [tenant_id]);
-
-      const status_counts = {};
-
-      for (const row of statusResult.rows) {
-        status_counts[row.governance_status] = row.count;
-      }
-
-      const latest_checks = decisionsResult.rows.map(decision => ({
-        decision_id: decision.decision_id,
-        object_id: decision.object_id,
-        tenant_id: decision.tenant_id,
-        governance_status: decision.governance_status,
-        reason_codes: decision.reason_codes || [],
-        risk_summary: {
-          risk_count: decision.risk_count,
-          max_risk_score: decision.max_risk_score,
-          acute_risk_count: decision.acute_risk_count
-        },
-        action_summary: {
-          open_action_count: decision.open_action_count,
-          high_open_action_count: decision.high_open_action_count
-        },
-        graph_summary: {
-          direct_edge_count: decision.graph_edge_count
-        },
-        audit_summary: {
-          event_count: decision.audit_event_count
-        },
-        created_at: decision.created_at
-      }));
-
-      return send(res, 200, {
-        tenant_id,
-        total_checks: totalResult.rows[0].total_checks,
-        status_counts,
-        latest_checks
-      });
-    }
-
-
-    // GOVERNANCE GATES DASHBOARD
-
-    if (req.method === "GET" && path === "/governance/gates/dashboard") {
-
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "auditor"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const eventsResult = await db.query(`
-        SELECT *
-        FROM runtime_events
-        WHERE tenant_id = $1
-          AND event_type LIKE 'runtime.governance.gate.%'
-        ORDER BY created_at DESC
-        LIMIT 50
-      `, [tenant_id]);
-
-      const statusResult = await db.query(`
-        SELECT event_type, COUNT(*)::int AS count
-        FROM runtime_events
-        WHERE tenant_id = $1
-          AND event_type LIKE 'runtime.governance.gate.%'
-        GROUP BY event_type
-      `, [tenant_id]);
-
-      const gate_counts = {
-        allowed: 0,
-        review_required: 0,
-        blocked: 0
-      };
-
-      for (const row of statusResult.rows) {
-        if (row.event_type === "runtime.governance.gate.allowed") {
-          gate_counts.allowed = row.count;
-        }
-        if (row.event_type === "runtime.governance.gate.review_required") {
-          gate_counts.review_required = row.count;
-        }
-        if (row.event_type === "runtime.governance.gate.blocked") {
-          gate_counts.blocked = row.count;
-        }
-      }
-
-      return send(res, 200, {
-        tenant_id,
-        gate_counts,
-        total_gate_events:
-          gate_counts.allowed +
-          gate_counts.review_required +
-          gate_counts.blocked,
-        latest_gate_events: eventsResult.rows
-      });
-    }
-
-
-    // GOVERNANCE APPROVALS CREATE
-
-    if (req.method === "POST" && path === "/governance/approvals") {
-
-      const auth = requireRole(req, [
-        "runtime_admin"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-      const body = await readBody(req);
-
-      const decision_id = body.decision_id;
-      const approval_status = body.approval_status;
-      const reason = body.reason || null;
-
-      if (!decision_id) {
-        return send(res, 400, {
-          error: "missing_decision_id"
-        });
-      }
-
-      if (!["approved", "rejected"].includes(approval_status)) {
-        return send(res, 400, {
-          error: "invalid_approval_status"
-        });
-      }
-
-      const decisionResult = await db.query(`
-        SELECT *
-        FROM runtime_governance_decisions
-        WHERE tenant_id = $1
-          AND decision_id = $2
-        LIMIT 1
-      `, [
-        tenant_id,
-        decision_id
-      ]);
-
-      if (decisionResult.rows.length === 0) {
-        return send(res, 404, {
-          error: "decision_not_found",
-          decision_id
-        });
-      }
-
-      const decision = decisionResult.rows[0];
-
-      const existingApprovalResult = await db.query(`
-        SELECT *
-        FROM runtime_governance_approvals
-        WHERE tenant_id = $1
-          AND decision_id = $2
-        ORDER BY created_at DESC
-        LIMIT 1
-      `, [
-        tenant_id,
-        decision_id
-      ]);
-
-      if (existingApprovalResult.rows.length > 0) {
-        return send(res, 409, {
-          error: "approval_already_exists",
-          decision_id,
-          existing_approval: existingApprovalResult.rows[0]
-        });
-      }
-
-      const approval_id =
-        `app-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-      await db.query(`
-        INSERT INTO runtime_governance_approvals
-        (
-          approval_id,
-          decision_id,
-          object_id,
-          tenant_id,
-          approval_status,
-          reason,
-          requested_by,
-          decided_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      `, [
-        approval_id,
-        decision_id,
-        decision.object_id,
-        tenant_id,
-        approval_status,
-        reason,
-        decision.object_id,
-        auth.user.operator_id || auth.user.username || "runtime_admin"
-      ]);
-
-      await writeEvent({
-        event_type: `runtime.governance.approval.${approval_status}`,
-        object_id: decision.object_id,
-        message: `Governance approval ${approval_status}`,
-        tenant_id
-      });
-
-      return send(res, 201, {
-        created: true,
-        approval: {
-          approval_id,
-          decision_id,
-          object_id: decision.object_id,
-          tenant_id,
-          approval_status,
-          reason
-        }
-      });
-    }
-
-    // GOVERNANCE APPROVALS LIST
-
-    if (req.method === "GET" && path === "/governance/approvals") {
-
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "auditor"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const result = await db.query(`
-        SELECT *
-        FROM runtime_governance_approvals
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-        LIMIT 100
-      `, [tenant_id]);
-
-      return send(res, 200, {
-        tenant_id,
-        count: result.rows.length,
-        approvals: result.rows
       });
     }
 
