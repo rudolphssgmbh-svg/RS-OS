@@ -5479,6 +5479,154 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+
+    // UPSERT RUNTIME TENANT SETTING
+
+    if (req.method === "POST" && path.startsWith("/runtime/tenants/") && path.endsWith("/settings")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = decodeURIComponent(
+        path
+          .replace("/runtime/tenants/", "")
+          .replace("/settings", "")
+      );
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "missing_tenant_id"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const setting_key = body.setting_key;
+      const setting_value = body.setting_value || {};
+
+      if (!setting_key) {
+        return send(res, 400, {
+          error: "missing_setting_key"
+        });
+      }
+
+      const tenantResult = await db.query(`
+        SELECT tenant_id
+        FROM runtime_tenants
+        WHERE tenant_id = $1
+        LIMIT 1
+      `, [
+        tenant_id
+      ]);
+
+      if (tenantResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "tenant_not_found",
+          tenant_id
+        });
+      }
+
+      const actor =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const setting_id =
+        "set-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const result = await db.query(`
+        INSERT INTO runtime_tenant_settings (
+          setting_id,
+          tenant_id,
+          setting_key,
+          setting_value,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5)
+        ON CONFLICT (tenant_id, setting_key)
+        DO UPDATE SET
+          setting_value = EXCLUDED.setting_value,
+          updated_by = $5,
+          updated_at = now()
+        RETURNING *
+      `, [
+        setting_id,
+        tenant_id,
+        setting_key,
+        JSON.stringify(setting_value),
+        actor
+      ]);
+
+      const setting = result.rows[0];
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: tenant_id,
+        event_type: "runtime.tenant.setting.upserted",
+        message: `Tenant setting upserted: ${setting.setting_key}`
+      });
+
+      return send(res, 200, {
+        upserted: true,
+        setting
+      });
+    }
+
+
+    // GET RUNTIME TENANT SETTINGS
+
+    if (req.method === "GET" && path.startsWith("/runtime/tenants/") && path.endsWith("/settings")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = decodeURIComponent(
+        path
+          .replace("/runtime/tenants/", "")
+          .replace("/settings", "")
+      );
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "missing_tenant_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          setting_id,
+          tenant_id,
+          setting_key,
+          setting_value,
+          created_by,
+          created_at,
+          updated_by,
+          updated_at
+        FROM runtime_tenant_settings
+        WHERE tenant_id = $1
+        ORDER BY setting_key ASC
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        tenant_id,
+        setting_count: result.rows.length,
+        settings: result.rows
+      });
+    }
+
     // GET RUNTIME TENANTS
 
     if (req.method === "GET" && path === "/runtime/tenants") {
