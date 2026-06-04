@@ -171,7 +171,9 @@ function generateToken(operator) {
   return jwt.sign({
       operator_id: operator.operator_id,
       role: operator.role,
-      tenant_id: operator.tenant_id
+      tenant_id: operator.tenant_id,
+      scope: operator.scope || "tenant",
+      system_role: operator.system_role || null
     },
     JWT_SECRET,
     {
@@ -5652,6 +5654,89 @@ if (req.method === "POST" && path === "/runtime/execute") {
         skipped_duplicates: skipped_duplicates.length,
         recommendations: inserted,
         duplicates: skipped_duplicates
+      });
+    }
+
+
+    // RSOS-050B Global Tenant Control API - Tenant List
+    if (req.method === "GET" && path === "/runtime/admin/tenants") {
+
+      const auth = requireRole(req, [
+        "system_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      if (auth.user.scope !== "global") {
+        return send(res, 403, {
+          error: "global_scope_required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          t.tenant_id,
+          t.tenant_name,
+          t.tenant_type,
+          t.status,
+          t.owner_name,
+          t.owner_email,
+          t.created_at,
+
+          COALESCE(d.domains, 0)::int AS domains,
+          COALESCE(m.members, 0)::int AS members,
+          COALESCE(c.credentials, 0)::int AS credentials,
+          COALESCE(o.objects, 0)::int AS objects,
+          COALESCE(r.recommendations, 0)::int AS recommendations,
+          COALESCE(tp.training_plans, 0)::int AS training_plans
+
+        FROM runtime_tenants t
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS domains
+          FROM runtime_tenant_domains
+          GROUP BY tenant_id
+        ) d ON d.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS members
+          FROM runtime_tenant_members
+          GROUP BY tenant_id
+        ) m ON m.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS credentials
+          FROM runtime_operator_credentials
+          GROUP BY tenant_id
+        ) c ON c.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS objects
+          FROM runtime_objects
+          GROUP BY tenant_id
+        ) o ON o.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS recommendations
+          FROM runtime_recommendations
+          GROUP BY tenant_id
+        ) r ON r.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS training_plans
+          FROM runtime_training_plans
+          GROUP BY tenant_id
+        ) tp ON tp.tenant_id = t.tenant_id
+
+        ORDER BY t.tenant_name ASC
+      `);
+
+      return send(res, 200, {
+        scope: "global",
+        tenant_count: result.rows.length,
+        tenants: result.rows
       });
     }
 
