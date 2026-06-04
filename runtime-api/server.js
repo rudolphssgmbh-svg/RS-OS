@@ -5659,6 +5659,376 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+
+
+    // RSOS-054B Knowledge API - Create
+    if (req.method === "POST" && path === "/runtime/knowledge") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance",
+        "system_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id =
+        body.tenant_id && auth.user.scope === "global"
+          ? body.tenant_id
+          : auth.user.tenant_id;
+
+      const knowledge_id =
+        body.knowledge_id ||
+        "kn-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const knowledge_type = body.knowledge_type;
+      const parent_knowledge_id = body.parent_knowledge_id || null;
+      const title = body.title;
+      const description = body.description || null;
+      const language_code = body.language_code || "de";
+      const version = body.version || 1;
+      const status = body.status || "active";
+      const source = body.source || "manual";
+
+      const content =
+        typeof body.content === "string"
+          ? body.content
+          : JSON.stringify(body.content || {});
+
+      if (!tenant_id || !knowledge_type || !title) {
+        return send(res, 400, {
+          error: "missing_required_knowledge_fields",
+          required: [
+            "tenant_id",
+            "knowledge_type",
+            "title"
+          ]
+        });
+      }
+
+      const existingResult = await db.query(`
+        SELECT knowledge_id
+        FROM runtime_knowledge
+        WHERE knowledge_id = $1
+        LIMIT 1
+      `, [knowledge_id]);
+
+      if (existingResult.rows.length > 0) {
+        return send(res, 409, {
+          error: "knowledge_already_exists",
+          knowledge_id
+        });
+      }
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const insertResult = await db.query(`
+        INSERT INTO runtime_knowledge (
+          knowledge_id,
+          tenant_id,
+          object_id,
+          knowledge_type,
+          parent_knowledge_id,
+          title,
+          description,
+          content,
+          source,
+          language_code,
+          version,
+          status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        RETURNING *
+      `, [
+        knowledge_id,
+        tenant_id,
+        body.object_id || null,
+        knowledge_type,
+        parent_knowledge_id,
+        title,
+        description,
+        content,
+        source,
+        language_code,
+        version,
+        status,
+        created_by
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.knowledge.created",
+        object_id: knowledge_id,
+        tenant_id,
+        message: "Knowledge created: " + title
+      });
+
+      return send(res, 200, {
+        created: true,
+        knowledge: insertResult.rows[0]
+      });
+    }
+
+    // RSOS-054B Knowledge API - List
+    if (req.method === "GET" && path === "/runtime/knowledge") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance",
+        "auditor",
+        "system_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && auth.user.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : auth.user.tenant_id;
+
+      const knowledge_type = urlObj.searchParams.get("knowledge_type");
+      const parent_knowledge_id = urlObj.searchParams.get("parent_knowledge_id");
+
+      const params = [tenant_id];
+      let where = "WHERE tenant_id = $1";
+
+      if (knowledge_type) {
+        params.push(knowledge_type);
+        where += " AND knowledge_type = $" + params.length;
+      }
+
+      if (parent_knowledge_id) {
+        params.push(parent_knowledge_id);
+        where += " AND parent_knowledge_id = $" + params.length;
+      }
+
+      const result = await db.query(`
+        SELECT
+          knowledge_id,
+          tenant_id,
+          object_id,
+          knowledge_type,
+          parent_knowledge_id,
+          title,
+          description,
+          content,
+          source,
+          language_code,
+          version,
+          status,
+          created_by,
+          created_at,
+          updated_by,
+          updated_at
+        FROM runtime_knowledge
+        ${where}
+        ORDER BY created_at ASC, title ASC
+      `, params);
+
+      return send(res, 200, {
+        tenant_id,
+        count: result.rows.length,
+        items: result.rows
+      });
+    }
+
+    // RSOS-054B Knowledge API - Detail
+    if (req.method === "GET" && path.startsWith("/runtime/knowledge/")) {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "governance",
+        "auditor",
+        "system_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const knowledge_id = decodeURIComponent(
+        path.replace("/runtime/knowledge/", "")
+      );
+
+      if (!knowledge_id) {
+        return send(res, 400, {
+          error: "missing_knowledge_id"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_knowledge
+        WHERE knowledge_id = $1
+        LIMIT 1
+      `, [knowledge_id]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "knowledge_not_found",
+          knowledge_id
+        });
+      }
+
+      const knowledge = result.rows[0];
+
+      if (auth.user.scope !== "global" && knowledge.tenant_id !== auth.user.tenant_id) {
+        return send(res, 403, {
+          error: "tenant_scope_violation"
+        });
+      }
+
+      const childrenResult = await db.query(`
+        SELECT
+          knowledge_id,
+          knowledge_type,
+          title,
+          description,
+          language_code,
+          status,
+          created_at
+        FROM runtime_knowledge
+        WHERE tenant_id = $1
+          AND parent_knowledge_id = $2
+        ORDER BY created_at ASC, title ASC
+      `, [
+        knowledge.tenant_id,
+        knowledge.knowledge_id
+      ]);
+
+      return send(res, 200, {
+        knowledge,
+        children: {
+          count: childrenResult.rows.length,
+          items: childrenResult.rows
+        }
+      });
+    }
+
+    // RSOS-051A Global Dashboard API
+    if (req.method === "GET" && path === "/runtime/admin/dashboard") {
+
+      const auth = requireRole(req, [
+        "system_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      if (auth.user.scope !== "global") {
+        return send(res, 403, {
+          error: "global_scope_required"
+        });
+      }
+
+      const summaryResult = await db.query(`
+        SELECT
+          (SELECT COUNT(*)::int FROM runtime_tenants) AS tenant_count,
+          (SELECT COUNT(*)::int FROM runtime_tenant_members) AS member_count,
+          (SELECT COUNT(*)::int FROM runtime_operator_credentials) AS credential_count,
+          (SELECT COUNT(*)::int FROM runtime_objects) AS object_count,
+          (SELECT COUNT(*)::int FROM runtime_recommendations) AS recommendation_count,
+          (SELECT COUNT(*)::int FROM runtime_training_plans) AS training_plan_count,
+          (SELECT COUNT(*)::int FROM runtime_learning_evidence) AS learning_evidence_count,
+          (SELECT COUNT(*)::int FROM runtime_risks) AS risk_count,
+          (SELECT COUNT(*)::int FROM runtime_governance_decisions) AS governance_decision_count,
+          (SELECT COUNT(*)::int FROM runtime_communication_events) AS communication_event_count,
+          (SELECT COUNT(*)::int FROM runtime_events) AS audit_event_count
+      `);
+
+      const tenantHealthResult = await db.query(`
+        SELECT
+          t.tenant_id,
+          t.tenant_name,
+          t.tenant_type,
+          t.status,
+
+          COALESCE(m.members, 0)::int AS members,
+          COALESCE(c.credentials, 0)::int AS credentials,
+          COALESCE(o.objects, 0)::int AS objects,
+          COALESCE(r.recommendations, 0)::int AS recommendations,
+          COALESCE(tp.training_plans, 0)::int AS training_plans,
+          COALESCE(le.learning_evidence, 0)::int AS learning_evidence,
+          COALESCE(risk.risks, 0)::int AS risks
+
+        FROM runtime_tenants t
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS members
+          FROM runtime_tenant_members
+          GROUP BY tenant_id
+        ) m ON m.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS credentials
+          FROM runtime_operator_credentials
+          GROUP BY tenant_id
+        ) c ON c.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS objects
+          FROM runtime_objects
+          GROUP BY tenant_id
+        ) o ON o.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS recommendations
+          FROM runtime_recommendations
+          GROUP BY tenant_id
+        ) r ON r.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS training_plans
+          FROM runtime_training_plans
+          GROUP BY tenant_id
+        ) tp ON tp.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS learning_evidence
+          FROM runtime_learning_evidence
+          GROUP BY tenant_id
+        ) le ON le.tenant_id = t.tenant_id
+
+        LEFT JOIN (
+          SELECT tenant_id, COUNT(*) AS risks
+          FROM runtime_risks
+          GROUP BY tenant_id
+        ) risk ON risk.tenant_id = t.tenant_id
+
+        ORDER BY t.tenant_name ASC
+      `);
+
+      const recentActivityResult = await db.query(`
+        SELECT
+          event_id,
+          event_type,
+          object_id,
+          tenant_id,
+          message,
+          created_at
+        FROM runtime_events
+        ORDER BY created_at DESC
+        LIMIT 50
+      `);
+
+      return send(res, 200, {
+        scope: "global",
+        summary: summaryResult.rows[0],
+        tenant_health: tenantHealthResult.rows,
+        recent_activity: recentActivityResult.rows
+      });
+    }
+
     // RSOS-050D Global Tenant Control API - Create Tenant
     if (req.method === "POST" && path === "/runtime/admin/tenants") {
 
