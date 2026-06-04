@@ -583,7 +583,9 @@ const server = http.createServer(async (req, res) => {
           c.tenant_id,
           m.role,
           m.status AS member_status,
-          c.status AS credential_status
+          c.status AS credential_status,
+          c.scope,
+          c.system_role
         FROM runtime_operator_credentials c
         JOIN runtime_tenant_members m
           ON m.tenant_id = c.tenant_id
@@ -610,8 +612,10 @@ const server = http.createServer(async (req, res) => {
       const operator = {
         operator_id: credential.username,
         username: credential.username,
-        role: credential.role === "tenant_admin" ? "runtime_admin" : credential.role,
-        tenant_id: credential.tenant_id
+        role: credential.system_role || (credential.role === "tenant_admin" ? "runtime_admin" : credential.role),
+        tenant_id: credential.tenant_id,
+        scope: credential.scope || "tenant",
+        system_role: credential.system_role || null
       };
 
       const operatorCertValid = verifyOperatorSignature();
@@ -631,7 +635,9 @@ const server = http.createServer(async (req, res) => {
         operator: {
           operator_id: operator.operator_id,
           role: operator.role,
-          tenant_id: operator.tenant_id
+          tenant_id: operator.tenant_id,
+          scope: operator.scope || "tenant",
+          system_role: operator.system_role || null
         },
         token
       });
