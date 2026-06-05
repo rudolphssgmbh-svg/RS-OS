@@ -2851,6 +2851,187 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/facts/governance-check") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const fact_id = body.fact_id;
+      const checked_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !fact_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and fact_id required"
+        });
+      }
+
+      const confidenceResult = await db.query(`
+        SELECT
+          confidence_id,
+          fact_id,
+          confidence_score,
+          trust_level,
+          calculation_details
+        FROM runtime_fact_confidence
+        WHERE tenant_id = $1
+          AND fact_id = $2
+        ORDER BY calculated_at DESC
+        LIMIT 1
+      `, [
+        tenant_id,
+        fact_id
+      ]);
+
+      if (confidenceResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "no confidence calculation found for fact"
+        });
+      }
+
+      const confidence = confidenceResult.rows[0];
+      const trust_level = confidence.trust_level;
+
+      let governance_decision = "investigate";
+      let human_approval_required = true;
+      let decision_reason = "LOW or unknown trust requires investigation";
+
+      if (trust_level === "VERY_HIGH") {
+        governance_decision = "auto_approve";
+        human_approval_required = false;
+        decision_reason = "VERY_HIGH trust allows automatic approval";
+      } else if (trust_level === "HIGH") {
+        governance_decision = "approve";
+        human_approval_required = false;
+        decision_reason = "HIGH trust allows standard approval";
+      } else if (trust_level === "MEDIUM") {
+        governance_decision = "four_eyes_required";
+        human_approval_required = true;
+        decision_reason = "MEDIUM trust requires four-eyes approval";
+      } else if (trust_level === "LOW") {
+        governance_decision = "investigate";
+        human_approval_required = true;
+        decision_reason = "LOW trust requires further investigation";
+      } else if (trust_level === "VERY_LOW") {
+        governance_decision = "quarantine";
+        human_approval_required = true;
+        decision_reason = "VERY_LOW trust requires quarantine";
+      }
+
+      const governance_check_id =
+        "00000000-0000-4015-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_governance_checks (
+          governance_check_id,
+          tenant_id,
+          fact_id,
+          confidence_id,
+          trust_level,
+          governance_decision,
+          human_approval_required,
+          decision_reason,
+          checked_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `, [
+        governance_check_id,
+        tenant_id,
+        fact_id,
+        confidence.confidence_id,
+        trust_level,
+        governance_decision,
+        human_approval_required,
+        decision_reason,
+        checked_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: fact_id,
+        event_type: "runtime.fact.governance.checked",
+        message: JSON.stringify({
+          governance_check_id,
+          fact_id,
+          confidence_id: confidence.confidence_id,
+          trust_level,
+          governance_decision,
+          human_approval_required
+        })
+      });
+
+      return send(res, 201, {
+        governance_check: {
+          governance_check_id,
+          tenant_id,
+          fact_id,
+          confidence_id: confidence.confidence_id,
+          confidence_score: confidence.confidence_score,
+          trust_level,
+          governance_decision,
+          human_approval_required,
+          decision_reason,
+          checked_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/governance-checks") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          governance_check_id,
+          tenant_id,
+          fact_id,
+          confidence_id,
+          trust_level,
+          governance_decision,
+          human_approval_required,
+          decision_reason,
+          checked_at,
+          checked_by
+        FROM runtime_governance_checks
+        WHERE tenant_id = $1
+        ORDER BY checked_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        governance_checks: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
