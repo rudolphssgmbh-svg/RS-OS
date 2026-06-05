@@ -1337,6 +1337,287 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/verifications") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const hypothesis_id = body.hypothesis_id || null;
+      const verification_method = body.verification_method;
+      const verification_notes = body.verification_notes || null;
+      const status = body.status || "pending";
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!verification_method) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "verification_method required"
+        });
+      }
+
+      const verification_id =
+        "00000000-0000-4005-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_verifications (
+          verification_id,
+          tenant_id,
+          hypothesis_id,
+          verification_method,
+          verification_notes,
+          status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `, [
+        verification_id,
+        tenant_id,
+        hypothesis_id,
+        verification_method,
+        verification_notes,
+        status,
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: verification_id,
+        event_type: "runtime.verification.created",
+        message: JSON.stringify({
+          verification_id,
+          hypothesis_id,
+          verification_method,
+          status
+        })
+      });
+
+      return send(res, 201, {
+        verification: {
+          verification_id,
+          tenant_id,
+          hypothesis_id,
+          verification_method,
+          verification_notes,
+          status,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/verifications") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          v.verification_id,
+          v.tenant_id,
+          v.hypothesis_id,
+          h.hypothesis_text,
+          v.verification_method,
+          v.verification_notes,
+          v.status,
+          v.created_at,
+          v.created_by
+        FROM runtime_verifications v
+        LEFT JOIN runtime_hypotheses h
+          ON h.hypothesis_id = v.hypothesis_id
+        WHERE v.tenant_id = $1
+        ORDER BY v.created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        verifications: result.rows
+      });
+    }
+
+    if (req.method === "POST" && path === "/runtime/verification-results") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const verification_id = body.verification_id || null;
+      const result_status = body.result_status;
+      const confidence = body.confidence || null;
+      const accepted_as_fact = body.accepted_as_fact === true;
+      const result_notes = body.result_notes || null;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!result_status) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "result_status required"
+        });
+      }
+
+      const result_id =
+        "00000000-0000-4006-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_verification_results (
+          result_id,
+          tenant_id,
+          verification_id,
+          result_status,
+          confidence,
+          accepted_as_fact,
+          result_notes,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `, [
+        result_id,
+        tenant_id,
+        verification_id,
+        result_status,
+        confidence,
+        accepted_as_fact,
+        result_notes,
+        created_by
+      ]);
+
+      if (verification_id) {
+        await db.query(`
+          UPDATE runtime_verifications
+          SET status = $1
+          WHERE tenant_id = $2
+            AND verification_id = $3
+        `, [
+          result_status,
+          tenant_id,
+          verification_id
+        ]);
+      }
+
+      await writeEvent({
+        tenant_id,
+        object_id: result_id,
+        event_type: "runtime.verification_result.created",
+        message: JSON.stringify({
+          result_id,
+          verification_id,
+          result_status,
+          confidence,
+          accepted_as_fact
+        })
+      });
+
+      return send(res, 201, {
+        verification_result: {
+          result_id,
+          tenant_id,
+          verification_id,
+          result_status,
+          confidence,
+          accepted_as_fact,
+          result_notes,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/verification-results") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          r.result_id,
+          r.tenant_id,
+          r.verification_id,
+          v.hypothesis_id,
+          h.hypothesis_text,
+          r.result_status,
+          r.confidence,
+          r.accepted_as_fact,
+          r.result_notes,
+          r.created_at,
+          r.created_by
+        FROM runtime_verification_results r
+        LEFT JOIN runtime_verifications v
+          ON v.verification_id = r.verification_id
+        LEFT JOIN runtime_hypotheses h
+          ON h.hypothesis_id = v.hypothesis_id
+        WHERE r.tenant_id = $1
+        ORDER BY r.created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        verification_results: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
