@@ -3524,6 +3524,189 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/heuristic-triggers") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const heuristic_id = body.heuristic_id;
+      const related_object_type = body.related_object_type || null;
+      const related_object_id = body.related_object_id || null;
+      const trigger_reason = body.trigger_reason || null;
+      const generated_assumption = body.generated_assumption || null;
+      const generated_hypothesis = body.generated_hypothesis || null;
+      const confidence_score = body.confidence_score === undefined ? null : body.confidence_score;
+      const status = body.status || "open";
+      const triggered_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !heuristic_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and heuristic_id required"
+        });
+      }
+
+      const heuristicResult = await db.query(`
+        SELECT heuristic_id, heuristic_name, enabled
+        FROM runtime_heuristics
+        WHERE tenant_id = $1
+          AND heuristic_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        heuristic_id
+      ]);
+
+      if (heuristicResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "heuristic not found"
+        });
+      }
+
+      if (heuristicResult.rows[0].enabled !== true) {
+        return send(res, 409, {
+          error: "heuristic_disabled",
+          message: "heuristic is disabled"
+        });
+      }
+
+      const trigger_id =
+        "00000000-0000-4019-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_heuristic_triggers (
+          trigger_id,
+          tenant_id,
+          heuristic_id,
+          related_object_type,
+          related_object_id,
+          trigger_reason,
+          generated_assumption,
+          generated_hypothesis,
+          confidence_score,
+          status,
+          triggered_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      `, [
+        trigger_id,
+        tenant_id,
+        heuristic_id,
+        related_object_type,
+        related_object_id,
+        trigger_reason,
+        generated_assumption,
+        generated_hypothesis,
+        confidence_score,
+        status,
+        triggered_by
+      ]);
+
+      await db.query(`
+        UPDATE runtime_heuristics
+        SET usage_count = COALESCE(usage_count, 0) + 1
+        WHERE tenant_id = $1
+          AND heuristic_id = $2
+      `, [
+        tenant_id,
+        heuristic_id
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: trigger_id,
+        event_type: "runtime.heuristic_trigger.created",
+        message: JSON.stringify({
+          trigger_id,
+          heuristic_id,
+          heuristic_name: heuristicResult.rows[0].heuristic_name,
+          related_object_type,
+          related_object_id,
+          confidence_score,
+          status
+        })
+      });
+
+      return send(res, 201, {
+        heuristic_trigger: {
+          trigger_id,
+          tenant_id,
+          heuristic_id,
+          heuristic_name: heuristicResult.rows[0].heuristic_name,
+          related_object_type,
+          related_object_id,
+          trigger_reason,
+          generated_assumption,
+          generated_hypothesis,
+          confidence_score,
+          status,
+          triggered_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/heuristic-triggers") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          t.trigger_id,
+          t.tenant_id,
+          t.heuristic_id,
+          h.heuristic_name,
+          h.heuristic_category,
+          t.related_object_type,
+          t.related_object_id,
+          t.trigger_reason,
+          t.generated_assumption,
+          t.generated_hypothesis,
+          t.confidence_score,
+          t.status,
+          t.triggered_at,
+          t.triggered_by
+        FROM runtime_heuristic_triggers t
+        LEFT JOIN runtime_heuristics h
+          ON h.heuristic_id = t.heuristic_id
+        WHERE t.tenant_id = $1
+        ORDER BY t.triggered_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        heuristic_triggers: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
