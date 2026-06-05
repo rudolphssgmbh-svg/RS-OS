@@ -4223,6 +4223,190 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/pattern-matches") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const pattern_id = body.pattern_id;
+      const related_object_type = body.related_object_type || null;
+      const related_object_id = body.related_object_id || null;
+      const heuristic_trigger_id = body.heuristic_trigger_id || null;
+      const match_reason = body.match_reason || null;
+      const match_confidence = body.match_confidence === undefined ? null : body.match_confidence;
+      const status = body.status || "open";
+      const matched_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !pattern_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and pattern_id required"
+        });
+      }
+
+      const patternResult = await db.query(`
+        SELECT pattern_id, pattern_name, enabled
+        FROM runtime_patterns
+        WHERE tenant_id = $1
+          AND pattern_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        pattern_id
+      ]);
+
+      if (patternResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "pattern not found"
+        });
+      }
+
+      if (patternResult.rows[0].enabled !== true) {
+        return send(res, 409, {
+          error: "pattern_disabled",
+          message: "pattern is disabled"
+        });
+      }
+
+      const match_id =
+        "00000000-0000-4022-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_pattern_matches (
+          match_id,
+          tenant_id,
+          pattern_id,
+          related_object_type,
+          related_object_id,
+          heuristic_trigger_id,
+          match_reason,
+          match_confidence,
+          status,
+          matched_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `, [
+        match_id,
+        tenant_id,
+        pattern_id,
+        related_object_type,
+        related_object_id,
+        heuristic_trigger_id,
+        match_reason,
+        match_confidence,
+        status,
+        matched_by
+      ]);
+
+      await db.query(`
+        UPDATE runtime_patterns
+        SET occurrence_count = COALESCE(occurrence_count, 0) + 1
+        WHERE tenant_id = $1
+          AND pattern_id = $2
+      `, [
+        tenant_id,
+        pattern_id
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: match_id,
+        event_type: "runtime.pattern_match.created",
+        message: JSON.stringify({
+          match_id,
+          pattern_id,
+          pattern_name: patternResult.rows[0].pattern_name,
+          related_object_type,
+          related_object_id,
+          heuristic_trigger_id,
+          match_confidence,
+          status
+        })
+      });
+
+      return send(res, 201, {
+        pattern_match: {
+          match_id,
+          tenant_id,
+          pattern_id,
+          pattern_name: patternResult.rows[0].pattern_name,
+          related_object_type,
+          related_object_id,
+          heuristic_trigger_id,
+          match_reason,
+          match_confidence,
+          status,
+          matched_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/pattern-matches") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          m.match_id,
+          m.tenant_id,
+          m.pattern_id,
+          p.pattern_name,
+          p.pattern_category,
+          m.related_object_type,
+          m.related_object_id,
+          m.heuristic_trigger_id,
+          h.heuristic_name,
+          m.match_reason,
+          m.match_confidence,
+          m.status,
+          m.matched_at,
+          m.matched_by
+        FROM runtime_pattern_matches m
+        LEFT JOIN runtime_patterns p
+          ON p.pattern_id = m.pattern_id
+        LEFT JOIN runtime_heuristic_triggers ht
+          ON ht.trigger_id = m.heuristic_trigger_id
+        LEFT JOIN runtime_heuristics h
+          ON h.heuristic_id = ht.heuristic_id
+        WHERE m.tenant_id = $1
+        ORDER BY m.matched_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        pattern_matches: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
