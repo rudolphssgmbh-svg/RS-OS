@@ -2419,6 +2419,195 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/facts/validate") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const fact_id = body.fact_id;
+
+      if (!tenant_id || !fact_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and fact_id required"
+        });
+      }
+
+      const factResult = await db.query(`
+        SELECT
+          f.fact_id,
+          f.verification_result_id,
+          vr.result_status,
+          vr.confidence,
+          vr.accepted_as_fact
+        FROM runtime_facts f
+        JOIN runtime_verification_results vr
+          ON vr.result_id = f.verification_result_id
+        WHERE f.tenant_id = $1
+          AND f.fact_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        fact_id
+      ]);
+
+      if (factResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "fact not found"
+        });
+      }
+
+      const ruleResult = await db.query(`
+        SELECT *
+        FROM runtime_fact_acceptance_rules
+        WHERE tenant_id = $1
+          AND enabled = true
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [
+        tenant_id
+      ]);
+
+      if (ruleResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "no active fact acceptance rule found"
+        });
+      }
+
+      const rule = ruleResult.rows[0];
+      const fact = factResult.rows[0];
+
+      const unknownResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_unknowns
+        WHERE tenant_id = $1
+          AND related_object_type = 'fact'
+          AND related_object_id = $2
+          AND status = 'open'
+      `, [
+        tenant_id,
+        fact_id
+      ]);
+
+      const conflictResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_source_conflicts
+        WHERE tenant_id = $1
+          AND status = 'open'
+      `, [
+        tenant_id
+      ]);
+
+      const evidenceResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_fact_sources
+        WHERE tenant_id = $1
+          AND fact_id = $2
+      `, [
+        tenant_id,
+        fact_id
+      ]);
+
+      const qualityResult = await db.query(`
+        SELECT AVG(rating)::numeric(5,2) AS avg_rating
+        FROM runtime_source_quality
+        WHERE tenant_id = $1
+      `, [
+        tenant_id
+      ]);
+
+      const verificationConfidence = Number(fact.confidence || 0);
+      const sourceQuality = Number(qualityResult.rows[0].avg_rating || 0);
+      const evidenceCount = Number(evidenceResult.rows[0].count || 0);
+      const openUnknowns = Number(unknownResult.rows[0].count || 0);
+      const openConflicts = Number(conflictResult.rows[0].count || 0);
+
+      const checks = {
+        accepted_as_fact:
+          fact.accepted_as_fact === true,
+
+        verification_confidence:
+          verificationConfidence >= Number(rule.minimum_verification_confidence || 0),
+
+        source_quality:
+          sourceQuality >= Number(rule.minimum_source_quality || 0),
+
+        evidence_count:
+          evidenceCount >= Number(rule.minimum_evidence_count || 0),
+
+        open_unknowns:
+          openUnknowns <= Number(rule.maximum_open_unknowns ?? 999999),
+
+        open_conflicts:
+          openConflicts <= Number(rule.maximum_open_conflicts ?? 999999)
+      };
+
+      const reasonMap = {
+        accepted_as_fact: "verification_result_not_accepted_as_fact",
+        verification_confidence: "minimum_verification_confidence_not_met",
+        source_quality: "minimum_source_quality_not_met",
+        evidence_count: "minimum_evidence_count_not_met",
+        open_unknowns: "maximum_open_unknowns_exceeded",
+        open_conflicts: "maximum_open_conflicts_exceeded"
+      };
+
+      const reasons = [];
+
+      Object.entries(checks).forEach(([key, passed]) => {
+        if (!passed) {
+          reasons.push(reasonMap[key] || key);
+        }
+      });
+
+      const accepted = reasons.length === 0;
+
+      const score =
+        Object.values(checks).filter(Boolean).length /
+        Object.keys(checks).length;
+
+      await writeEvent({
+        tenant_id,
+        object_id: fact_id,
+        event_type: "runtime.fact.validation.completed",
+        message: JSON.stringify({
+          fact_id,
+          accepted,
+          score,
+          rule_id: rule.rule_id,
+          rule_name: rule.rule_name,
+          reasons
+        })
+      });
+
+      return send(res, 200, {
+        accepted,
+        score,
+        fact_id,
+        rule_id: rule.rule_id,
+        rule_name: rule.rule_name,
+        metrics: {
+          verification_confidence: verificationConfidence,
+          source_quality: sourceQuality,
+          evidence_count: evidenceCount,
+          open_unknowns: openUnknowns,
+          open_conflicts: openConflicts
+        },
+        checks,
+        reasons
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
