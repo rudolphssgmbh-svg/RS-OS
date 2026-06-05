@@ -3174,6 +3174,211 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/lessons-learned/generate") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const outcome_id = body.outcome_id;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !outcome_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and outcome_id required"
+        });
+      }
+
+      const outcomeResult = await db.query(`
+        SELECT
+          o.outcome_id,
+          o.tenant_id,
+          o.fact_id,
+          o.governance_check_id,
+          o.outcome_status,
+          o.outcome_correct,
+          o.outcome_notes,
+          gc.trust_level,
+          gc.governance_decision
+        FROM runtime_governance_outcomes o
+        LEFT JOIN runtime_governance_checks gc
+          ON gc.governance_check_id = o.governance_check_id
+        WHERE o.tenant_id = $1
+          AND o.outcome_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        outcome_id
+      ]);
+
+      if (outcomeResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "governance outcome not found"
+        });
+      }
+
+      const outcome = outcomeResult.rows[0];
+
+      let lesson_type = "governance_feedback";
+      let lesson_summary = "Governance outcome recorded.";
+      let recommended_action = "Review governance outcome manually.";
+
+      if (outcome.outcome_correct === true) {
+        if (outcome.trust_level === "LOW" && outcome.governance_decision === "investigate") {
+          lesson_type = "trust_validation";
+          lesson_summary = "LOW trust correctly triggered investigation.";
+          recommended_action = "Keep current LOW trust investigation threshold.";
+        } else if (outcome.trust_level === "VERY_LOW" && outcome.governance_decision === "quarantine") {
+          lesson_type = "trust_validation";
+          lesson_summary = "VERY_LOW trust correctly triggered quarantine.";
+          recommended_action = "Keep current VERY_LOW quarantine threshold.";
+        } else if ((outcome.trust_level === "HIGH" || outcome.trust_level === "VERY_HIGH") && outcome.governance_decision.includes("approve")) {
+          lesson_type = "trust_validation";
+          lesson_summary = "High trust correctly supported approval.";
+          recommended_action = "Keep current approval threshold.";
+        } else if (outcome.trust_level === "MEDIUM" && outcome.governance_decision === "four_eyes_required") {
+          lesson_type = "trust_validation";
+          lesson_summary = "MEDIUM trust correctly required four-eyes review.";
+          recommended_action = "Keep current MEDIUM four-eyes threshold.";
+        }
+      } else if (outcome.outcome_correct === false) {
+        if (outcome.trust_level === "HIGH" || outcome.trust_level === "VERY_HIGH") {
+          lesson_type = "false_positive";
+          lesson_summary = "High trust decision produced incorrect outcome.";
+          recommended_action = "Lower trust weighting or require additional verification for similar cases.";
+        } else if (outcome.trust_level === "LOW" || outcome.trust_level === "VERY_LOW") {
+          lesson_type = "false_negative";
+          lesson_summary = "Low trust assessment may have underestimated a correct outcome.";
+          recommended_action = "Review penalty weights and evidence factors for similar cases.";
+        } else {
+          lesson_type = "governance_miscalibration";
+          lesson_summary = "Governance decision produced incorrect outcome.";
+          recommended_action = "Review governance rule calibration.";
+        }
+      }
+
+      const lesson_id =
+        "00000000-0000-4017-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_lessons_learned (
+          lesson_id,
+          tenant_id,
+          outcome_id,
+          fact_id,
+          trust_level,
+          governance_decision,
+          outcome_correct,
+          lesson_type,
+          lesson_summary,
+          recommended_action,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      `, [
+        lesson_id,
+        tenant_id,
+        outcome.outcome_id,
+        outcome.fact_id,
+        outcome.trust_level,
+        outcome.governance_decision,
+        outcome.outcome_correct,
+        lesson_type,
+        lesson_summary,
+        recommended_action,
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: outcome.fact_id || outcome.outcome_id,
+        event_type: "runtime.lesson_learned.generated",
+        message: JSON.stringify({
+          lesson_id,
+          outcome_id,
+          fact_id: outcome.fact_id,
+          trust_level: outcome.trust_level,
+          governance_decision: outcome.governance_decision,
+          outcome_correct: outcome.outcome_correct,
+          lesson_type
+        })
+      });
+
+      return send(res, 201, {
+        lesson_learned: {
+          lesson_id,
+          tenant_id,
+          outcome_id: outcome.outcome_id,
+          fact_id: outcome.fact_id,
+          trust_level: outcome.trust_level,
+          governance_decision: outcome.governance_decision,
+          outcome_correct: outcome.outcome_correct,
+          lesson_type,
+          lesson_summary,
+          recommended_action,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/lessons-learned") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          lesson_id,
+          tenant_id,
+          outcome_id,
+          fact_id,
+          trust_level,
+          governance_decision,
+          outcome_correct,
+          lesson_type,
+          lesson_summary,
+          recommended_action,
+          created_at,
+          created_by
+        FROM runtime_lessons_learned
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        lessons_learned: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
