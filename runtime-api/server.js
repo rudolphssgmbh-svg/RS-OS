@@ -2608,6 +2608,249 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/facts/calculate-confidence") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const fact_id = body.fact_id;
+      const calculated_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !fact_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and fact_id required"
+        });
+      }
+
+      const factResult = await db.query(`
+        SELECT
+          f.fact_id,
+          f.verification_result_id,
+          vr.confidence AS verification_confidence,
+          vr.accepted_as_fact
+        FROM runtime_facts f
+        LEFT JOIN runtime_verification_results vr
+          ON vr.result_id = f.verification_result_id
+        WHERE f.tenant_id = $1
+          AND f.fact_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        fact_id
+      ]);
+
+      if (factResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "fact not found"
+        });
+      }
+
+      const qualityResult = await db.query(`
+        SELECT AVG(rating)::numeric(5,2) AS avg_rating
+        FROM runtime_source_quality
+        WHERE tenant_id = $1
+      `, [
+        tenant_id
+      ]);
+
+      const evidenceResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_fact_sources
+        WHERE tenant_id = $1
+          AND fact_id = $2
+      `, [
+        tenant_id,
+        fact_id
+      ]);
+
+      const unknownResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_unknowns
+        WHERE tenant_id = $1
+          AND related_object_type = 'fact'
+          AND related_object_id = $2
+          AND status = 'open'
+      `, [
+        tenant_id,
+        fact_id
+      ]);
+
+      const conflictResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_source_conflicts
+        WHERE tenant_id = $1
+          AND status = 'open'
+      `, [
+        tenant_id
+      ]);
+
+      const verificationConfidence =
+        Number(factResult.rows[0].verification_confidence || 0);
+
+      const sourceQuality =
+        Number(qualityResult.rows[0].avg_rating || 0);
+
+      const evidenceCount =
+        Number(evidenceResult.rows[0].count || 0);
+
+      const openUnknowns =
+        Number(unknownResult.rows[0].count || 0);
+
+      const openConflicts =
+        Number(conflictResult.rows[0].count || 0);
+
+      const evidenceFactor =
+        Math.min(1, evidenceCount / 3);
+
+      const unknownPenalty =
+        Math.min(0.50, openUnknowns * 0.10);
+
+      const conflictPenalty =
+        Math.min(0.50, openConflicts * 0.15);
+
+      let confidenceScore =
+        (verificationConfidence * 0.45) +
+        (sourceQuality * 0.30) +
+        (evidenceFactor * 0.25) -
+        unknownPenalty -
+        conflictPenalty;
+
+      confidenceScore =
+        Math.max(0, Math.min(1, confidenceScore));
+
+      confidenceScore =
+        Math.round(confidenceScore * 100) / 100;
+
+      let trustLevel = "VERY_LOW";
+
+      if (confidenceScore >= 0.90) {
+        trustLevel = "VERY_HIGH";
+      } else if (confidenceScore >= 0.75) {
+        trustLevel = "HIGH";
+      } else if (confidenceScore >= 0.50) {
+        trustLevel = "MEDIUM";
+      } else if (confidenceScore >= 0.25) {
+        trustLevel = "LOW";
+      }
+
+      const confidence_id =
+        "00000000-0000-4014-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      const calculationDetails = {
+        formula: "verification*0.45 + source_quality*0.30 + evidence_factor*0.25 - unknown_penalty - conflict_penalty",
+        verification_confidence: verificationConfidence,
+        source_quality: sourceQuality,
+        evidence_count: evidenceCount,
+        evidence_factor: evidenceFactor,
+        open_unknowns: openUnknowns,
+        unknown_penalty: unknownPenalty,
+        open_conflicts: openConflicts,
+        conflict_penalty: conflictPenalty,
+        confidence_score: confidenceScore,
+        trust_level: trustLevel
+      };
+
+      await db.query(`
+        INSERT INTO runtime_fact_confidence (
+          confidence_id,
+          tenant_id,
+          fact_id,
+          confidence_score,
+          trust_level,
+          calculation_details,
+          calculated_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `, [
+        confidence_id,
+        tenant_id,
+        fact_id,
+        confidenceScore,
+        trustLevel,
+        JSON.stringify(calculationDetails),
+        calculated_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: fact_id,
+        event_type: "runtime.fact.confidence.calculated",
+        message: JSON.stringify({
+          confidence_id,
+          fact_id,
+          confidence_score: confidenceScore,
+          trust_level: trustLevel
+        })
+      });
+
+      return send(res, 201, {
+        fact_confidence: {
+          confidence_id,
+          tenant_id,
+          fact_id,
+          confidence_score: confidenceScore,
+          trust_level: trustLevel,
+          calculation_details: calculationDetails,
+          calculated_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/fact-confidence") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          confidence_id,
+          tenant_id,
+          fact_id,
+          confidence_score,
+          trust_level,
+          calculation_details,
+          calculated_at,
+          calculated_by
+        FROM runtime_fact_confidence
+        WHERE tenant_id = $1
+        ORDER BY calculated_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        fact_confidence: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
