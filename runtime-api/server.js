@@ -3032,6 +3032,148 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/governance-outcomes") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const governance_check_id = body.governance_check_id || null;
+      const fact_id = body.fact_id || null;
+      const outcome_status = body.outcome_status;
+      const outcome_correct = body.outcome_correct === undefined ? null : body.outcome_correct;
+      const outcome_notes = body.outcome_notes || null;
+      const outcome_date = body.outcome_date || null;
+      const recorded_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!outcome_status) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "outcome_status required"
+        });
+      }
+
+      const outcome_id =
+        "00000000-0000-4016-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_governance_outcomes (
+          outcome_id,
+          tenant_id,
+          governance_check_id,
+          fact_id,
+          outcome_status,
+          outcome_correct,
+          outcome_notes,
+          outcome_date,
+          recorded_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8::timestamptz, NOW()),$9)
+      `, [
+        outcome_id,
+        tenant_id,
+        governance_check_id,
+        fact_id,
+        outcome_status,
+        outcome_correct,
+        outcome_notes,
+        outcome_date,
+        recorded_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: fact_id || governance_check_id || outcome_id,
+        event_type: "runtime.governance_outcome.recorded",
+        message: JSON.stringify({
+          outcome_id,
+          governance_check_id,
+          fact_id,
+          outcome_status,
+          outcome_correct
+        })
+      });
+
+      return send(res, 201, {
+        governance_outcome: {
+          outcome_id,
+          tenant_id,
+          governance_check_id,
+          fact_id,
+          outcome_status,
+          outcome_correct,
+          outcome_notes,
+          outcome_date,
+          recorded_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/governance-outcomes") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          o.outcome_id,
+          o.tenant_id,
+          o.governance_check_id,
+          o.fact_id,
+          gc.trust_level,
+          gc.governance_decision,
+          o.outcome_status,
+          o.outcome_correct,
+          o.outcome_notes,
+          o.outcome_date,
+          o.recorded_at,
+          o.recorded_by
+        FROM runtime_governance_outcomes o
+        LEFT JOIN runtime_governance_checks gc
+          ON gc.governance_check_id = o.governance_check_id
+        WHERE o.tenant_id = $1
+        ORDER BY o.recorded_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        governance_outcomes: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
