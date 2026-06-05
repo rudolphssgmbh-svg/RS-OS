@@ -3707,6 +3707,161 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/heuristic-triggers/materialize") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const trigger_id = body.trigger_id;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !trigger_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and trigger_id required"
+        });
+      }
+
+      const triggerResult = await db.query(`
+        SELECT
+          t.trigger_id,
+          t.tenant_id,
+          t.heuristic_id,
+          h.heuristic_name,
+          t.generated_assumption,
+          t.generated_hypothesis,
+          t.confidence_score,
+          t.status
+        FROM runtime_heuristic_triggers t
+        LEFT JOIN runtime_heuristics h
+          ON h.heuristic_id = t.heuristic_id
+        WHERE t.tenant_id = $1
+          AND t.trigger_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        trigger_id
+      ]);
+
+      if (triggerResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "heuristic trigger not found"
+        });
+      }
+
+      const trigger = triggerResult.rows[0];
+
+      if (trigger.status === "materialized") {
+        return send(res, 409, {
+          error: "already_materialized",
+          message: "heuristic trigger already materialized"
+        });
+      }
+
+      if (!trigger.generated_assumption || !trigger.generated_hypothesis) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "generated_assumption and generated_hypothesis required"
+        });
+      }
+
+      const assumption_id =
+        "00000000-0000-4003-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_assumptions (
+          assumption_id,
+          tenant_id,
+          assumption_text,
+          confidence,
+          status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6)
+      `, [
+        assumption_id,
+        tenant_id,
+        "[Heuristic: " + trigger.heuristic_name + "] " + trigger.generated_assumption,
+        trigger.confidence_score,
+        "open",
+        created_by
+      ]);
+
+      const hypothesis_id =
+        "00000000-0000-4004-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_hypotheses (
+          hypothesis_id,
+          tenant_id,
+          assumption_id,
+          hypothesis_text,
+          confidence,
+          verification_status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `, [
+        hypothesis_id,
+        tenant_id,
+        assumption_id,
+        "[Heuristic: " + trigger.heuristic_name + "] " + trigger.generated_hypothesis,
+        trigger.confidence_score,
+        "unverified",
+        created_by
+      ]);
+
+      await db.query(`
+        UPDATE runtime_heuristic_triggers
+        SET status = 'materialized'
+        WHERE tenant_id = $1
+          AND trigger_id = $2
+      `, [
+        tenant_id,
+        trigger_id
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: trigger_id,
+        event_type: "runtime.heuristic_trigger.materialized",
+        message: JSON.stringify({
+          trigger_id,
+          heuristic_id: trigger.heuristic_id,
+          heuristic_name: trigger.heuristic_name,
+          assumption_id,
+          hypothesis_id,
+          confidence_score: trigger.confidence_score
+        })
+      });
+
+      return send(res, 201, {
+        materialized_heuristic_trigger: {
+          trigger_id,
+          tenant_id,
+          heuristic_id: trigger.heuristic_id,
+          heuristic_name: trigger.heuristic_name,
+          assumption_id,
+          hypothesis_id,
+          confidence_score: trigger.confidence_score,
+          status: "materialized",
+          created_by
+        }
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
