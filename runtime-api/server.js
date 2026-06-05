@@ -2273,6 +2273,152 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/fact-acceptance-rules") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const rule_name = body.rule_name;
+      const minimum_verification_confidence = body.minimum_verification_confidence || null;
+      const minimum_source_quality = body.minimum_source_quality || null;
+      const minimum_evidence_count = body.minimum_evidence_count || null;
+      const maximum_open_unknowns = body.maximum_open_unknowns === undefined ? null : body.maximum_open_unknowns;
+      const maximum_open_conflicts = body.maximum_open_conflicts === undefined ? null : body.maximum_open_conflicts;
+      const enabled = body.enabled === false ? false : true;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!rule_name) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "rule_name required"
+        });
+      }
+
+      const rule_id =
+        "00000000-0000-4013-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_fact_acceptance_rules (
+          rule_id,
+          tenant_id,
+          rule_name,
+          minimum_verification_confidence,
+          minimum_source_quality,
+          minimum_evidence_count,
+          maximum_open_unknowns,
+          maximum_open_conflicts,
+          enabled,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `, [
+        rule_id,
+        tenant_id,
+        rule_name,
+        minimum_verification_confidence,
+        minimum_source_quality,
+        minimum_evidence_count,
+        maximum_open_unknowns,
+        maximum_open_conflicts,
+        enabled,
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: rule_id,
+        event_type: "runtime.fact_acceptance_rule.created",
+        message: JSON.stringify({
+          rule_id,
+          rule_name,
+          minimum_verification_confidence,
+          minimum_source_quality,
+          minimum_evidence_count,
+          maximum_open_unknowns,
+          maximum_open_conflicts,
+          enabled
+        })
+      });
+
+      return send(res, 201, {
+        fact_acceptance_rule: {
+          rule_id,
+          tenant_id,
+          rule_name,
+          minimum_verification_confidence,
+          minimum_source_quality,
+          minimum_evidence_count,
+          maximum_open_unknowns,
+          maximum_open_conflicts,
+          enabled,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/fact-acceptance-rules") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          rule_id,
+          tenant_id,
+          rule_name,
+          minimum_verification_confidence,
+          minimum_source_quality,
+          minimum_evidence_count,
+          maximum_open_unknowns,
+          maximum_open_conflicts,
+          enabled,
+          created_at,
+          created_by
+        FROM runtime_fact_acceptance_rules
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        fact_acceptance_rules: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
