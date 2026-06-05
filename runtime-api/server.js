@@ -2004,6 +2004,275 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/source-quality") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const source_id = body.source_id || null;
+      const quality_dimension = body.quality_dimension;
+      const rating = body.rating || null;
+      const assessment_notes = body.assessment_notes || null;
+      const assessed_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!quality_dimension) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "quality_dimension required"
+        });
+      }
+
+      const source_quality_id =
+        "00000000-0000-4011-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_source_quality (
+          source_quality_id,
+          tenant_id,
+          source_id,
+          quality_dimension,
+          rating,
+          assessment_notes,
+          assessed_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `, [
+        source_quality_id,
+        tenant_id,
+        source_id,
+        quality_dimension,
+        rating,
+        assessment_notes,
+        assessed_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: source_quality_id,
+        event_type: "runtime.source_quality.created",
+        message: JSON.stringify({
+          source_quality_id,
+          source_id,
+          quality_dimension,
+          rating
+        })
+      });
+
+      return send(res, 201, {
+        source_quality: {
+          source_quality_id,
+          tenant_id,
+          source_id,
+          quality_dimension,
+          rating,
+          assessment_notes,
+          assessed_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/source-quality") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          q.source_quality_id,
+          q.tenant_id,
+          q.source_id,
+          s.title AS source_title,
+          s.source_type,
+          q.quality_dimension,
+          q.rating,
+          q.assessment_notes,
+          q.assessed_at,
+          q.assessed_by
+        FROM runtime_source_quality q
+        LEFT JOIN runtime_sources s
+          ON s.source_id = q.source_id
+        WHERE q.tenant_id = $1
+        ORDER BY q.assessed_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        source_quality: result.rows
+      });
+    }
+
+    if (req.method === "POST" && path === "/runtime/source-conflicts") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const source_id_a = body.source_id_a || null;
+      const source_id_b = body.source_id_b || null;
+      const conflict_type = body.conflict_type;
+      const description = body.description || null;
+      const status = body.status || "open";
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!conflict_type) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "conflict_type required"
+        });
+      }
+
+      const conflict_id =
+        "00000000-0000-4012-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_source_conflicts (
+          conflict_id,
+          tenant_id,
+          source_id_a,
+          source_id_b,
+          conflict_type,
+          description,
+          status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `, [
+        conflict_id,
+        tenant_id,
+        source_id_a,
+        source_id_b,
+        conflict_type,
+        description,
+        status,
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: conflict_id,
+        event_type: "runtime.source_conflict.created",
+        message: JSON.stringify({
+          conflict_id,
+          source_id_a,
+          source_id_b,
+          conflict_type,
+          status
+        })
+      });
+
+      return send(res, 201, {
+        source_conflict: {
+          conflict_id,
+          tenant_id,
+          source_id_a,
+          source_id_b,
+          conflict_type,
+          description,
+          status,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/source-conflicts") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          c.conflict_id,
+          c.tenant_id,
+          c.source_id_a,
+          sa.title AS source_a_title,
+          c.source_id_b,
+          sb.title AS source_b_title,
+          c.conflict_type,
+          c.description,
+          c.status,
+          c.created_at,
+          c.created_by
+        FROM runtime_source_conflicts c
+        LEFT JOIN runtime_sources sa
+          ON sa.source_id = c.source_id_a
+        LEFT JOIN runtime_sources sb
+          ON sb.source_id = c.source_id_b
+        WHERE c.tenant_id = $1
+        ORDER BY c.created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        source_conflicts: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
