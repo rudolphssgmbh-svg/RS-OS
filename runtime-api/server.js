@@ -4084,6 +4084,145 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/patterns") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const pattern_name = body.pattern_name;
+      const pattern_category = body.pattern_category || null;
+      const description = body.description || null;
+      const confidence_score = body.confidence_score === undefined ? null : body.confidence_score;
+      const enabled = body.enabled === false ? false : true;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!pattern_name) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "pattern_name required"
+        });
+      }
+
+      const pattern_id =
+        "00000000-0000-4021-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_patterns (
+          pattern_id,
+          tenant_id,
+          pattern_name,
+          pattern_category,
+          description,
+          confidence_score,
+          enabled,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `, [
+        pattern_id,
+        tenant_id,
+        pattern_name,
+        pattern_category,
+        description,
+        confidence_score,
+        enabled,
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: pattern_id,
+        event_type: "runtime.pattern.created",
+        message: JSON.stringify({
+          pattern_id,
+          pattern_name,
+          pattern_category,
+          confidence_score,
+          enabled
+        })
+      });
+
+      return send(res, 201, {
+        pattern: {
+          pattern_id,
+          tenant_id,
+          pattern_name,
+          pattern_category,
+          description,
+          occurrence_count: 0,
+          success_count: 0,
+          failure_count: 0,
+          confidence_score,
+          enabled,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/patterns") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          pattern_id,
+          tenant_id,
+          pattern_name,
+          pattern_category,
+          description,
+          occurrence_count,
+          success_count,
+          failure_count,
+          confidence_score,
+          enabled,
+          created_at,
+          created_by
+        FROM runtime_patterns
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        patterns: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
