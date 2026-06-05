@@ -3862,6 +3862,228 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/heuristic-feedback") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const heuristic_id = body.heuristic_id;
+      const trigger_id = body.trigger_id || null;
+      const lesson_id = body.lesson_id || null;
+      const outcome_correct = body.outcome_correct === undefined ? null : body.outcome_correct;
+      const feedback_reason = body.feedback_reason || null;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !heuristic_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and heuristic_id required"
+        });
+      }
+
+      if (outcome_correct === null) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "outcome_correct required"
+        });
+      }
+
+      const heuristicResult = await db.query(`
+        SELECT
+          heuristic_id,
+          heuristic_name,
+          reliability_score,
+          success_count,
+          failure_count
+        FROM runtime_heuristics
+        WHERE tenant_id = $1
+          AND heuristic_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        heuristic_id
+      ]);
+
+      if (heuristicResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "heuristic not found"
+        });
+      }
+
+      const heuristic = heuristicResult.rows[0];
+
+      const reliability_before =
+        Number(heuristic.reliability_score || 0);
+
+      const success_count_before =
+        Number(heuristic.success_count || 0);
+
+      const failure_count_before =
+        Number(heuristic.failure_count || 0);
+
+      const success_count_after =
+        outcome_correct === true
+          ? success_count_before + 1
+          : success_count_before;
+
+      const failure_count_after =
+        outcome_correct === false
+          ? failure_count_before + 1
+          : failure_count_before;
+
+      const total =
+        success_count_after + failure_count_after;
+
+      let reliability_after =
+        total > 0
+          ? success_count_after / total
+          : reliability_before;
+
+      reliability_after =
+        Math.round(reliability_after * 100) / 100;
+
+      const feedback_id =
+        "00000000-0000-4020-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_heuristic_feedback (
+          feedback_id,
+          tenant_id,
+          heuristic_id,
+          trigger_id,
+          lesson_id,
+          outcome_correct,
+          reliability_before,
+          reliability_after,
+          feedback_reason,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `, [
+        feedback_id,
+        tenant_id,
+        heuristic_id,
+        trigger_id,
+        lesson_id,
+        outcome_correct,
+        reliability_before,
+        reliability_after,
+        feedback_reason,
+        created_by
+      ]);
+
+      await db.query(`
+        UPDATE runtime_heuristics
+        SET
+          success_count = $1,
+          failure_count = $2,
+          reliability_score = $3
+        WHERE tenant_id = $4
+          AND heuristic_id = $5
+      `, [
+        success_count_after,
+        failure_count_after,
+        reliability_after,
+        tenant_id,
+        heuristic_id
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: heuristic_id,
+        event_type: "runtime.heuristic.feedback.recorded",
+        message: JSON.stringify({
+          feedback_id,
+          heuristic_id,
+          trigger_id,
+          lesson_id,
+          outcome_correct,
+          reliability_before,
+          reliability_after
+        })
+      });
+
+      return send(res, 201, {
+        heuristic_feedback: {
+          feedback_id,
+          tenant_id,
+          heuristic_id,
+          heuristic_name: heuristic.heuristic_name,
+          trigger_id,
+          lesson_id,
+          outcome_correct,
+          reliability_before,
+          reliability_after,
+          success_count_before,
+          success_count_after,
+          failure_count_before,
+          failure_count_after,
+          feedback_reason,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/heuristic-feedback") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          f.feedback_id,
+          f.tenant_id,
+          f.heuristic_id,
+          h.heuristic_name,
+          f.trigger_id,
+          f.lesson_id,
+          f.outcome_correct,
+          f.reliability_before,
+          f.reliability_after,
+          f.feedback_reason,
+          f.created_at,
+          f.created_by
+        FROM runtime_heuristic_feedback f
+        LEFT JOIN runtime_heuristics h
+          ON h.heuristic_id = f.heuristic_id
+        WHERE f.tenant_id = $1
+        ORDER BY f.created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        heuristic_feedback: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
