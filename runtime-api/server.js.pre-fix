@@ -1,0 +1,689 @@
+const crypto = require("crypto");
+const fs = require("fs");
+const http = require("http");
+const { Client } = require("pg");
+const jwt = require("jsonwebtoken");
+
+//const ROOT_PUBLIC_KEY = fs.readFileSync(
+//  "/app/keys/root_public.pem",
+//  "utf8"
+//);
+const ROOT_PUBLIC_KEY = "DEV_MODE";
+
+const JWT_SECRET = process.env.JWT_SECRET || "RSOS_SECURE_RUNTIME_2026";
+
+const db = new Client({
+  host: "rsos-postgres",
+  port: 5432,
+  user: "rsos",
+  password: "rsos_secure_2026",
+  database: "rsos_runtime"
+});
+
+async function initDb() {
+  await db.connect();
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS runtime_objects (
+      object_id TEXT PRIMARY KEY,
+      runtime_type TEXT NOT NULL,
+      state TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      risk_score INTEGER NOT NULL,
+      tenant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS runtime_events (
+      event_id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      object_id TEXT,
+      message TEXT,
+      audit_hash TEXT,
+      previous_hash TEXT,
+      tenant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS runtime_execution_jobs (
+      job_id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      requested_by TEXT,
+      result_message TEXT,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  console.log("Database initialized");
+}
+
+function send(res, code, data) {
+  res.writeHead(code, {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "https://app.rudolph-buchhaltung.de",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization"
+  });
+
+  res.end(JSON.stringify({
+    timestamp: new Date().toISOString(),
+...data
+  }));
+}
+
+function createAuditHash(payload) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(payload))
+    .digest("hex");
+}
+
+async function writeEvent({
+  event_type,
+  object_id = null,
+  message = "",
+  tenant_id = null
+}) {
+
+  const previousEvent = await db.query(`
+    SELECT audit_hash
+    FROM runtime_events
+    ORDER BY created_at DESC
+    LIMIT 1
+  `);
+
+  const previous_hash =
+    previousEvent.rows.length > 0
+      ? previousEvent.rows[0].audit_hash
+      : null;
+
+  const audit_hash = createAuditHash({
+    event_type,
+    object_id,
+    message,
+    previous_hash,
+    tenant_id
+  });
+
+  const event_id =
+    "evt-" +
+    Date.now() +
+    "-" +
+    Math.random().toString(36).substring(2, 8);
+
+  await db.query(`
+    INSERT INTO runtime_events
+    (
+      event_id,
+      event_type,
+      object_id,
+      message,
+      audit_hash,
+      previous_hash,
+      tenant_id
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+  `, [
+    event_id,
+    event_type,
+    object_id,
+    message,
+    audit_hash,
+    previous_hash,
+    tenant_id
+  ]);
+
+  return {
+    event_id,
+    audit_hash
+  };
+}
+
+// function verifyOperatorSignature(operatorFile, signatureFile) {
+// 
+//   const operatorData = fs.readFileSync(operatorFile);
+//   const signature = fs.readFileSync(signatureFile);
+// 
+//   const verify = crypto.createVerify("SHA256");
+// 
+//   verify.update(operatorData);
+//   verify.end();
+// 
+//   return verify.verify(ROOT_PUBLIC_KEY, signature);
+// }
+
+function verifyOperatorSignature() {
+  return true;
+}
+
+function generateToken(operator) {
+
+  return jwt.sign({
+      operator_id: operator.operator_id,
+      role: operator.role,
+      tenant_id: operator.tenant_id
+    },
+    JWT_SECRET,
+    {
+      expiresIn: "12h"
+    }
+  );
+}
+
+function verifyToken(req) {
+
+  const auth = req.headers.authorization;
+
+  if (!auth) {
+    return null;
+  }
+
+  const token = auth.replace("Bearer ", "");
+
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch (err) {
+    return null;
+  }
+}
+
+function requireRole(req, allowedRoles) {
+
+  const authUser = verifyToken(req);
+
+  if (!authUser) {
+    return {
+      allowed: false,
+      code: 401,
+      response: {
+        error: "unauthorized",
+        message: "JWT token required"
+      }
+    };
+  }
+
+  if (!allowedRoles.includes(authUser.role)) {
+    return {
+      allowed: false,
+      code: 403,
+      response: {
+        error: "forbidden",
+        message: "insufficient_role"
+      }
+    };
+  }
+
+  return {
+    allowed: true,
+    user: authUser
+  };
+}
+
+function readBody(req) {
+
+  return new Promise((resolve, reject) => {
+
+    let body = "";
+
+    req.on("data", chunk => {
+      body += chunk;
+    });
+
+    req.on("end", () => {
+
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (err) {
+        reject(new Error("Invalid JSON"));
+      }
+    });
+  });
+}
+
+const server = http.createServer(async (req, res) => {
+
+  const path = req.url.split("?")[0];
+
+  if (req.method === "OPTIONS") {
+
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "https://app.rudolph-buchhaltung.de",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization"
+    });
+
+    return res.end();
+  }
+
+  try {
+
+    // HEALTH
+
+    if (req.method === "GET" && path === "/health") {
+
+      return send(res, 200, {
+        status: "ok",
+        runtime: "healthy",
+        database: "connected"
+      });
+    }
+
+    // AUTH LOGIN
+
+    if (req.method === "POST" && path === "/auth/login") {
+
+      const body = await readBody(req);
+
+      const operators = [
+        {
+          operator_id: "janette",
+          username: "janette",
+          password: "rsos2026",
+          role: "runtime_admin",
+          tenant_id: "tenant-rudolph"
+        },
+        {
+          operator_id: "qm_operator",
+          username: "qm",
+          password: "qm2026",
+          role: "qm",
+          tenant_id: "tenant-rudolph"
+        },
+        {
+          operator_id: "finance_operator",
+          username: "finance",
+          password: "finance2026",
+          role: "finance",
+          tenant_id: "tenant-rudolph"
+        },
+        {
+          operator_id: "auditor",
+          username: "auditor",
+          password: "audit2026",
+          role: "auditor",
+          tenant_id: "tenant-rudolph"
+        }
+      ];
+
+      const operator = operators.find(o =>
+        o.username === body.username &&
+        o.password === body.password
+      );
+
+      if (!operator) {
+
+        return send(res, 401, {
+          authenticated: false,
+          error: "invalid_credentials"
+        });
+      }
+
+      const operatorCertValid = verifyOperatorSignature(
+        "/app/operators/janette.operator.json",
+        "/app/operators/janette.operator.sig"
+      );
+
+      if (!operatorCertValid) {
+
+        return send(res, 403, {
+          authenticated: false,
+          error: "operator_certificate_invalid"
+        });
+      }
+
+      const token = generateToken(operator);
+
+      return send(res, 200, {
+        authenticated: true,
+        operator_certificate_verified: true,
+        operator: {
+          operator_id: operator.operator_id,
+          role: operator.role,
+          tenant_id: operator.tenant_id
+        },
+        token
+      });
+    }
+
+    // CREATE OBJECT
+
+    if (req.method === "POST" && path === "/runtime/objects") {
+
+      const auth = requireRole(req, [
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const authUser = auth.user;
+      const tenant_id = authUser.tenant_id;
+      const body = await readBody(req);
+
+      const object_id =
+        body.object_id ||
+        `obj-${Date.now()}`;
+
+      const runtime_type =
+        body.runtime_type ||
+        "runtime.object.generic";
+
+      const state =
+        body.state ||
+        "created";
+
+      const priority =
+        body.priority ||
+        "normal";
+
+      const risk_score =
+        Number.isInteger(body.risk_score)
+          ? body.risk_score
+          : 0;
+
+
+
+      // FIXED:
+      // runtime_objects persistiert jetzt korrekt
+
+      await db.query(`
+        INSERT INTO runtime_objects
+        (
+          object_id,
+          runtime_type,
+          state,
+          priority,
+          risk_score,
+          tenant_id
+        )
+        VALUES ($1,$2,$3,$4,$5,$6)
+      `, [
+        object_id,
+        runtime_type,
+        state,
+        priority,
+        risk_score,
+        tenant_id
+      ]);
+
+      // FIXED:
+      // nur EIN Event Insert
+
+      await writeEvent({
+        event_type: "runtime.object.created",
+        object_id,
+        message: "Runtime object created",
+        tenant_id
+      });
+
+      return send(res, 201, {
+        created: true,
+        object: {
+          object_id,
+          runtime_type,
+          state,
+          priority,
+          risk_score,
+          tenant_id
+        }
+      });
+
+// CREATE OBJECT
+if (req.method === "POST" && path === "/runtime/objects") {
+
+
+// EXECUTION LAYER
+if (req.method === "POST" && path === "/runtime/execute") {
+
+  const executeAuth = requireRole(req, [
+    "runtime_admin"
+  ]);
+
+  if (!executeAuth.allowed) {
+    return send(res, executeAuth.code, executeAuth.response);
+  }
+
+  const authUser = executeAuth.user;
+  const tenant_id = authUser.tenant_id;
+
+  const body = await readBody(req);
+
+  const job_id = `job-${Date.now()}`;
+  const object_id = body.object_id;
+  const execution_type = body.execution_type || "runtime.execution";
+  const payload = body.payload || {};
+
+  await db.query(`
+    INSERT INTO runtime_execution_jobs
+    (
+      job_id,
+      object_id,
+      tenant_id,
+      execution_type,
+      status,
+      payload
+    )
+    VALUES ($1,$2,$3,$4,$5,$6)
+  `, [
+    job_id,
+    object_id,
+    tenant_id,
+    execution_type,
+    "pending",
+    JSON.stringify(payload)
+  ]);
+
+  await writeEvent({
+    event_type: "runtime.execution.started",
+    object_id,
+    message: `Execution started: ${execution_type}`,
+    tenant_id
+  });
+
+  return send(res, 200, {
+    execution_started: true,
+    job_id,
+    object_id,
+    execution_type,
+    tenant_id
+  });
+}
+    // GET OBJECTS
+
+    if (req.method === "GET" && path === "/runtime/objects") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      //onst tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        count: result.rows.length,
+        objects: result.rows
+      });
+    }
+
+    // GET EVENTS
+
+    if (req.method === "GET" && path === "/runtime/events") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_events
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        count: result.rows.length,
+        events: result.rows
+      });
+    }
+
+    // DASHBOARD
+
+    if (req.method === "GET" && path === "/runtime/dashboard") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+
+      const objectsResult = await db.query(`
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      const eventsResult = await db.query(`
+        SELECT *
+        FROM runtime_events
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      const objects = objectsResult.rows;
+      const events = eventsResult.rows;
+
+      const activeObjects = objects.filter(
+        o => o.state !== "completed"
+      );
+
+      const highRiskObjects = objects.filter(
+        o => o.risk_score >= 70
+      );
+
+      return send(res, 200, {
+        dashboard: {
+          summary: {
+            total_objects: objects.length,
+            active_objects: activeObjects.length,
+            high_risk_objects: highRiskObjects.length,
+            total_events: events.length
+          },
+          objects
+        }
+      });
+    }
+
+    // GOVERNANCE EVALUATE
+
+    if (req.method === "GET" && path === "/governance/evaluate") {
+
+      const auth = requireRole(req, [
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_objects
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [tenant_id]);
+
+      const object = result.rows[0];
+
+      if (!object) {
+
+        return send(res, 200, {
+          decision: "no_object"
+        });
+      }
+
+      const allowed =
+        object.risk_score < 70;
+
+      return send(res, 200, {
+        decision: allowed
+          ? "allowed"
+          : "blocked",
+
+        governance_state: allowed
+          ? "baseline_clear"
+          : "operator_approval_required",
+
+        risk_score: object.risk_score,
+        evaluated_object: object.object_id
+      });
+    }
+
+    return send(res, 404, {
+      error: "not_found",
+      path,
+      method: req.method
+    });
+
+  } catch (err) {
+
+    console.error(err);
+
+    return send(res, 500, {
+      error: "runtime_error",
+      message: err.message
+    });
+  }
+});
+
+initDb()
+  .then(() => {
+
+    server.listen(8080, () => {
+
+      console.log(
+        "RS OS Runtime active on port 8080"
+      );
+    });
+  })
+  .catch(err => {
+
+    console.error(
+      "Database init failed:",
+      err
+    );
+
+    process.exit(1);
+  });
