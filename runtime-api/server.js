@@ -1618,6 +1618,205 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/facts") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const verification_result_id = body.verification_result_id || null;
+      const fact_text = body.fact_text;
+      const confidence = body.confidence || null;
+      const fact_status = body.fact_status || "accepted";
+      const evidence_id = body.evidence_id || null;
+      const source_weight = body.source_weight || null;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!verification_result_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "verification_result_id required"
+        });
+      }
+
+      if (!fact_text) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "fact_text required"
+        });
+      }
+
+      const verificationResult = await db.query(`
+        SELECT
+          result_id,
+          tenant_id,
+          result_status,
+          confidence,
+          accepted_as_fact
+        FROM runtime_verification_results
+        WHERE tenant_id = $1
+          AND result_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        verification_result_id
+      ]);
+
+      if (verificationResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "verification_result not found"
+        });
+      }
+
+      if (verificationResult.rows[0].accepted_as_fact !== true) {
+        return send(res, 409, {
+          error: "fact_not_accepted",
+          message: "verification_result.accepted_as_fact must be true before creating a fact"
+        });
+      }
+
+      const fact_id =
+        "00000000-0000-4007-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_facts (
+          fact_id,
+          tenant_id,
+          verification_result_id,
+          fact_text,
+          confidence,
+          fact_status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `, [
+        fact_id,
+        tenant_id,
+        verification_result_id,
+        fact_text,
+        confidence,
+        fact_status,
+        created_by
+      ]);
+
+      let fact_source_id = null;
+
+      if (evidence_id) {
+        fact_source_id =
+          "00000000-0000-4008-8000-" +
+          crypto.randomBytes(6).toString("hex");
+
+        await db.query(`
+          INSERT INTO runtime_fact_sources (
+            fact_source_id,
+            tenant_id,
+            fact_id,
+            evidence_id,
+            source_weight
+          )
+          VALUES ($1,$2,$3,$4,$5)
+        `, [
+          fact_source_id,
+          tenant_id,
+          fact_id,
+          evidence_id,
+          source_weight
+        ]);
+      }
+
+      await writeEvent({
+        tenant_id,
+        object_id: fact_id,
+        event_type: "runtime.fact.created",
+        message: JSON.stringify({
+          fact_id,
+          verification_result_id,
+          confidence,
+          fact_status,
+          evidence_id,
+          fact_source_id
+        })
+      });
+
+      return send(res, 201, {
+        fact: {
+          fact_id,
+          tenant_id,
+          verification_result_id,
+          fact_text,
+          confidence,
+          fact_status,
+          evidence_id,
+          fact_source_id,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/facts") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          f.fact_id,
+          f.tenant_id,
+          f.verification_result_id,
+          vr.result_status,
+          vr.accepted_as_fact,
+          f.fact_text,
+          f.confidence,
+          f.fact_status,
+          f.created_at,
+          f.created_by
+        FROM runtime_facts f
+        LEFT JOIN runtime_verification_results vr
+          ON vr.result_id = f.verification_result_id
+        WHERE f.tenant_id = $1
+        ORDER BY f.created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        facts: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
