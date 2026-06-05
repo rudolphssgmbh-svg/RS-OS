@@ -4407,6 +4407,228 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/pattern-feedback") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const pattern_id = body.pattern_id;
+      const match_id = body.match_id || null;
+      const lesson_id = body.lesson_id || null;
+      const outcome_correct = body.outcome_correct === undefined ? null : body.outcome_correct;
+      const feedback_reason = body.feedback_reason || null;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !pattern_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id and pattern_id required"
+        });
+      }
+
+      if (outcome_correct === null) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "outcome_correct required"
+        });
+      }
+
+      const patternResult = await db.query(`
+        SELECT
+          pattern_id,
+          pattern_name,
+          confidence_score,
+          success_count,
+          failure_count
+        FROM runtime_patterns
+        WHERE tenant_id = $1
+          AND pattern_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        pattern_id
+      ]);
+
+      if (patternResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "pattern not found"
+        });
+      }
+
+      const pattern = patternResult.rows[0];
+
+      const confidence_before =
+        Number(pattern.confidence_score || 0);
+
+      const success_count_before =
+        Number(pattern.success_count || 0);
+
+      const failure_count_before =
+        Number(pattern.failure_count || 0);
+
+      const success_count_after =
+        outcome_correct === true
+          ? success_count_before + 1
+          : success_count_before;
+
+      const failure_count_after =
+        outcome_correct === false
+          ? failure_count_before + 1
+          : failure_count_before;
+
+      const total =
+        success_count_after + failure_count_after;
+
+      let confidence_after =
+        total > 0
+          ? success_count_after / total
+          : confidence_before;
+
+      confidence_after =
+        Math.round(confidence_after * 100) / 100;
+
+      const feedback_id =
+        "00000000-0000-4023-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_pattern_feedback (
+          feedback_id,
+          tenant_id,
+          pattern_id,
+          match_id,
+          lesson_id,
+          outcome_correct,
+          confidence_before,
+          confidence_after,
+          feedback_reason,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `, [
+        feedback_id,
+        tenant_id,
+        pattern_id,
+        match_id,
+        lesson_id,
+        outcome_correct,
+        confidence_before,
+        confidence_after,
+        feedback_reason,
+        created_by
+      ]);
+
+      await db.query(`
+        UPDATE runtime_patterns
+        SET
+          success_count = $1,
+          failure_count = $2,
+          confidence_score = $3
+        WHERE tenant_id = $4
+          AND pattern_id = $5
+      `, [
+        success_count_after,
+        failure_count_after,
+        confidence_after,
+        tenant_id,
+        pattern_id
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: pattern_id,
+        event_type: "runtime.pattern.feedback.recorded",
+        message: JSON.stringify({
+          feedback_id,
+          pattern_id,
+          match_id,
+          lesson_id,
+          outcome_correct,
+          confidence_before,
+          confidence_after
+        })
+      });
+
+      return send(res, 201, {
+        pattern_feedback: {
+          feedback_id,
+          tenant_id,
+          pattern_id,
+          pattern_name: pattern.pattern_name,
+          match_id,
+          lesson_id,
+          outcome_correct,
+          confidence_before,
+          confidence_after,
+          success_count_before,
+          success_count_after,
+          failure_count_before,
+          failure_count_after,
+          feedback_reason,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/pattern-feedback") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          f.feedback_id,
+          f.tenant_id,
+          f.pattern_id,
+          p.pattern_name,
+          f.match_id,
+          f.lesson_id,
+          f.outcome_correct,
+          f.confidence_before,
+          f.confidence_after,
+          f.feedback_reason,
+          f.created_at,
+          f.created_by
+        FROM runtime_pattern_feedback f
+        LEFT JOIN runtime_patterns p
+          ON p.pattern_id = f.pattern_id
+        WHERE f.tenant_id = $1
+        ORDER BY f.created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        pattern_feedback: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
