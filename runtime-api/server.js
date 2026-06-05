@@ -3379,6 +3379,151 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+    if (req.method === "POST" && path === "/runtime/heuristics") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const heuristic_name = body.heuristic_name;
+      const heuristic_category = body.heuristic_category || null;
+      const description = body.description || null;
+      const risk_level = body.risk_level || null;
+      const reliability_score = body.reliability_score === undefined ? null : body.reliability_score;
+      const enabled = body.enabled === false ? false : true;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      if (!heuristic_name) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "heuristic_name required"
+        });
+      }
+
+      const heuristic_id =
+        "00000000-0000-4018-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_heuristics (
+          heuristic_id,
+          tenant_id,
+          heuristic_name,
+          heuristic_category,
+          description,
+          risk_level,
+          reliability_score,
+          enabled,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `, [
+        heuristic_id,
+        tenant_id,
+        heuristic_name,
+        heuristic_category,
+        description,
+        risk_level,
+        reliability_score,
+        enabled,
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: heuristic_id,
+        event_type: "runtime.heuristic.created",
+        message: JSON.stringify({
+          heuristic_id,
+          heuristic_name,
+          heuristic_category,
+          risk_level,
+          reliability_score,
+          enabled
+        })
+      });
+
+      return send(res, 201, {
+        heuristic: {
+          heuristic_id,
+          tenant_id,
+          heuristic_name,
+          heuristic_category,
+          description,
+          risk_level,
+          reliability_score,
+          usage_count: 0,
+          success_count: 0,
+          failure_count: 0,
+          enabled,
+          created_by
+        }
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/heuristics") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      if (!tenant_id) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT
+          heuristic_id,
+          tenant_id,
+          heuristic_name,
+          heuristic_category,
+          description,
+          risk_level,
+          reliability_score,
+          usage_count,
+          success_count,
+          failure_count,
+          enabled,
+          created_at,
+          created_by
+        FROM runtime_heuristics
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        heuristics: result.rows
+      });
+    }
+
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
