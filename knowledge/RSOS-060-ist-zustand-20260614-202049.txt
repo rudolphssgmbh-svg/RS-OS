@@ -942,3 +942,10 @@ RSOS-060 SERVER DIFF BEWERTUNG 2026-06-14T22:03:39+00:00
 ERGEBNIS: server.js Diff gegen Git-Basis ist 24239 Zeilen und nicht commit-sicher.
 URSACHE: Backup enthält bereits große uncommitted Defense-/Runtime-Vorarbeiten gegenüber Git HEAD.
 MASSNAHME: server.js nicht in RSOS-060 Commit aufnehmen; laufenden Container dokumentieren.
+
+RSOS-060 PHASE 2 IST-ZUSTAND 2026-06-14T22:16:35+00:00
+ERGEBNIS: runtime_outcomes und runtime_measurements erfolgreich angelegt.
+- runtime_outcomes: 13 Spalten
+- runtime_measurements: 11 Spalten
+- Outcome -> Measurement Verknuepfung ueber outcome_id vorhanden
+BEWERTUNG: RS OS kann jetzt Ergebnis und Messung strukturell speichern.
