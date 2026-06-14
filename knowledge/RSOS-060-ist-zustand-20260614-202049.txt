@@ -933,3 +933,12 @@ RSOS-060 relevante server.js-Aenderung: Client -> Pool plus Reports-Endpunkte.
 RSOS-060 relevante Migrationen:
 - runtime-api/migrations/029_runtime_reports.sql
 - runtime-api/migrations/031_runtime_governance_decision_type_fix.sql
+
+RSOS-060 STAGING STOP 2026-06-14T21:56:15+00:00
+ERGEBNIS: server.js staged diff ist zu gross fuer sicheren RSOS-060 Commit.
+MASSNAHME: server.js aus Stage entfernen; Migrationen und Ist-Dokumentation bleiben getrennt pruefbar.
+
+RSOS-060 SERVER DIFF BEWERTUNG 2026-06-14T22:03:39+00:00
+ERGEBNIS: server.js Diff gegen Git-Basis ist 24239 Zeilen und nicht commit-sicher.
+URSACHE: Backup enthält bereits große uncommitted Defense-/Runtime-Vorarbeiten gegenüber Git HEAD.
+MASSNAHME: server.js nicht in RSOS-060 Commit aufnehmen; laufenden Container dokumentieren.
