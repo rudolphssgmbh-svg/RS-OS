@@ -1,0 +1,935 @@
+RSOS-060 IST-ZUSTAND 2026-06-14T20:20:49+00:00
+PFAD: /opt/rsos
+BRANCH: master
+COMMIT: 874b7b5 RSOS-356..362 Master Dashboard, Tenant Dashboard and Governance Evidence
+AENDERUNGEN:
+ M dashboard/audit/audit-report-dashboard.txt
+ M dashboard/governance/governance-health.txt
+ M dashboard/master/master-dashboard.txt
+ M dashboard/operations/operations-health.txt
+ M dashboard/runtime/runtime-health.txt
+ M dashboard/tenant/tenant-dashboard.txt
+ M dashboard/unified/unified-dashboard.txt
+ M docker-compose.yml
+ M frontend/index.html
+ M runtime-api/server.js
+?? changelog/
+?? docker-compose.before-rsos066b-env.20260605-202235.yml
+?? docker/
+?? frontend/index.before-rsos051d-admin-frontend.20260604-133246.html
+?? frontend/index.before-rsos053a-tenant-detail-view.20260604-135050.html
+?? knowledge/
+?? master
+?? node-agent/
+?? registry-server/
+?? runtime-api/migrations/040_runtime_ingress_events.sql
+?? runtime-api/migrations/041_runtime_quarantine_queue.sql
+?? runtime-api/migrations/042_runtime_savepoints.sql
+?? runtime-api/migrations/043_runtime_shadow_validations.sql
+?? runtime-api/migrations/044_runtime_defense_state.sql
+?? runtime-api/migrations/045_runtime_recovery_requests.sql
+?? runtime-api/migrations/046_runtime_recovery_verifications.sql
+?? runtime-api/migrations/047_runtime_audit_reports.sql
+?? runtime-api/migrations/047_runtime_defense_metrics.sql
+?? runtime-api/migrations/071_runtime_incidents.sql
+?? runtime-api/migrations/072_runtime_incident_links.sql
+?? runtime-api/migrations/073_runtime_incident_lessons.sql
+?? runtime-api/rsos066c_stress_test.sh
+?? runtime-api/rsos066c_stress_test_v2.sh
+DOCKER STATUS 2026-06-14T20:21:43+00:00
+
+RUNTIME API HEALTH:
+{"timestamp":"2026-06-14T20:21:43.142Z","status":"ok","runtime":"healthy","database":"connected"}
+POSTGRES CHECK:
+
+RSOS-060 BEWERTUNG 2026-06-14T20:22:18+00:00
+ERGEBNIS: Runtime API erreichbar; Datenbank laut /health verbunden.
+HINWEIS: Docker-Pruefung blockiert durch fehlende Berechtigung auf /var/run/docker.sock.
+MASSNAHME: Docker/Postgres-Pruefung mit sudo wiederholen.
+
+RSOS-060 DB USER CHECK 2026-06-14T20:23:11+00:00
+ERGEBNIS: Rolle postgres existiert nicht; DB-Benutzer aus Container-Umgebung ermitteln.
+POSTGRES_DB=rsos_runtime
+POSTGRES_USER=rsos
+           table_name           
+--------------------------------
+ runtime_assumptions
+ runtime_communication_evidence
+ runtime_events
+ runtime_evidence
+ runtime_fact_sources
+ runtime_knowledge
+ runtime_learning_evidence
+ runtime_objects
+ runtime_recovery_verifications
+ runtime_source_conflicts
+ runtime_source_quality
+ runtime_sources
+ runtime_unknown_dependencies
+ runtime_unknowns
+ runtime_verification_results
+ runtime_verifications
+(16 rows)
+
+          table_name          |     column_name      |        data_type         | is_nullable 
+------------------------------+----------------------+--------------------------+-------------
+ runtime_assumptions          | assumption_id        | uuid                     | NO
+ runtime_assumptions          | tenant_id            | text                     | NO
+ runtime_assumptions          | evidence_id          | uuid                     | YES
+ runtime_assumptions          | assumption_text      | text                     | NO
+ runtime_assumptions          | confidence           | numeric                  | YES
+ runtime_assumptions          | status               | text                     | YES
+ runtime_assumptions          | created_at           | timestamp with time zone | YES
+ runtime_assumptions          | created_by           | text                     | YES
+ runtime_events               | event_id             | text                     | NO
+ runtime_events               | event_type           | text                     | NO
+ runtime_events               | object_id            | text                     | YES
+ runtime_events               | message              | text                     | YES
+ runtime_events               | audit_hash           | text                     | YES
+ runtime_events               | created_at           | timestamp with time zone | YES
+ runtime_events               | previous_hash        | text                     | YES
+ runtime_events               | tenant_id            | text                     | YES
+ runtime_evidence             | evidence_id          | uuid                     | NO
+ runtime_evidence             | tenant_id            | text                     | NO
+ runtime_evidence             | source_id            | uuid                     | YES
+ runtime_evidence             | object_id            | text                     | YES
+ runtime_evidence             | event_id             | uuid                     | YES
+ runtime_evidence             | evidence_type        | text                     | NO
+ runtime_evidence             | title                | text                     | YES
+ runtime_evidence             | evidence_text        | text                     | YES
+ runtime_evidence             | evidence_hash        | text                     | YES
+ runtime_evidence             | confidence           | numeric                  | YES
+ runtime_evidence             | evidence_status      | text                     | YES
+ runtime_evidence             | observed_at          | timestamp with time zone | YES
+ runtime_evidence             | created_at           | timestamp with time zone | YES
+ runtime_evidence             | created_by           | text                     | YES
+ runtime_fact_sources         | fact_source_id       | uuid                     | NO
+ runtime_fact_sources         | tenant_id            | text                     | NO
+ runtime_fact_sources         | fact_id              | uuid                     | YES
+ runtime_fact_sources         | evidence_id          | uuid                     | YES
+ runtime_fact_sources         | source_weight        | numeric                  | YES
+ runtime_fact_sources         | created_at           | timestamp with time zone | YES
+ runtime_knowledge            | knowledge_id         | text                     | NO
+ runtime_knowledge            | tenant_id            | text                     | NO
+ runtime_knowledge            | object_id            | text                     | YES
+ runtime_knowledge            | knowledge_type       | text                     | NO
+ runtime_knowledge            | title                | text                     | NO
+ runtime_knowledge            | content              | text                     | NO
+ runtime_knowledge            | source               | text                     | YES
+ runtime_knowledge            | created_at           | timestamp with time zone | YES
+ runtime_knowledge            | updated_at           | timestamp with time zone | YES
+ runtime_knowledge            | parent_knowledge_id  | text                     | YES
+ runtime_knowledge            | description          | text                     | YES
+ runtime_knowledge            | language_code        | text                     | YES
+ runtime_knowledge            | version              | integer                  | YES
+ runtime_knowledge            | status               | text                     | YES
+ runtime_knowledge            | created_by           | text                     | YES
+ runtime_knowledge            | updated_by           | text                     | YES
+ runtime_objects              | object_id            | text                     | NO
+ runtime_objects              | runtime_type         | text                     | NO
+ runtime_objects              | state                | text                     | NO
+ runtime_objects              | priority             | text                     | NO
+ runtime_objects              | risk_score           | integer                  | NO
+ runtime_objects              | created_at           | timestamp with time zone | YES
+ runtime_objects              | tenant_id            | text                     | YES
+ runtime_source_conflicts     | conflict_id          | uuid                     | NO
+ runtime_source_conflicts     | tenant_id            | text                     | NO
+ runtime_source_conflicts     | source_id_a          | uuid                     | YES
+ runtime_source_conflicts     | source_id_b          | uuid                     | YES
+ runtime_source_conflicts     | conflict_type        | text                     | NO
+ runtime_source_conflicts     | description          | text                     | YES
+ runtime_source_conflicts     | status               | text                     | YES
+ runtime_source_conflicts     | created_at           | timestamp with time zone | YES
+ runtime_source_conflicts     | created_by           | text                     | YES
+ runtime_source_quality       | source_quality_id    | uuid                     | NO
+ runtime_source_quality       | tenant_id            | text                     | NO
+ runtime_source_quality       | source_id            | uuid                     | YES
+ runtime_source_quality       | quality_dimension    | text                     | NO
+ runtime_source_quality       | rating               | numeric                  | YES
+ runtime_source_quality       | assessment_notes     | text                     | YES
+ runtime_source_quality       | assessed_at          | timestamp with time zone | YES
+ runtime_source_quality       | assessed_by          | text                     | YES
+ runtime_sources              | source_id            | uuid                     | NO
+ runtime_sources              | tenant_id            | text                     | NO
+ runtime_sources              | source_type          | text                     | NO
+ runtime_sources              | title                | text                     | YES
+ runtime_sources              | description          | text                     | YES
+ runtime_sources              | source_url           | text                     | YES
+ runtime_sources              | jurisdiction         | text                     | YES
+ runtime_sources              | source_owner         | text                     | YES
+ runtime_sources              | trust_level          | integer                  | YES
+ runtime_sources              | status               | text                     | YES
+ runtime_sources              | created_at           | timestamp with time zone | YES
+ runtime_sources              | created_by           | text                     | YES
+ runtime_unknown_dependencies | dependency_id        | uuid                     | NO
+ runtime_unknown_dependencies | tenant_id            | text                     | NO
+ runtime_unknown_dependencies | unknown_id           | uuid                     | YES
+ runtime_unknown_dependencies | dependency_type      | text                     | NO
+ runtime_unknown_dependencies | dependency_reference | text                     | YES
+ runtime_unknown_dependencies | created_at           | timestamp with time zone | YES
+ runtime_unknowns             | unknown_id           | uuid                     | NO
+ runtime_unknowns             | tenant_id            | text                     | NO
+ runtime_unknowns             | related_object_type  | text                     | YES
+ runtime_unknowns             | related_object_id    | text                     | YES
+ runtime_unknowns             | unknown_type         | text                     | NO
+ runtime_unknowns             | title                | text                     | NO
+ runtime_unknowns             | description          | text                     | YES
+ runtime_unknowns             | risk_level           | integer                  | YES
+ runtime_unknowns             | status               | text                     | YES
+ runtime_unknowns             | created_at           | timestamp with time zone | YES
+ runtime_unknowns             | created_by           | text                     | YES
+ runtime_verification_results | result_id            | uuid                     | NO
+ runtime_verification_results | tenant_id            | text                     | NO
+ runtime_verification_results | verification_id      | uuid                     | YES
+ runtime_verification_results | result_status        | text                     | NO
+ runtime_verification_results | confidence           | numeric                  | YES
+ runtime_verification_results | accepted_as_fact     | boolean                  | YES
+ runtime_verification_results | result_notes         | text                     | YES
+ runtime_verification_results | created_at           | timestamp with time zone | YES
+ runtime_verification_results | created_by           | text                     | YES
+ runtime_verifications        | verification_id      | uuid                     | NO
+ runtime_verifications        | tenant_id            | text                     | NO
+ runtime_verifications        | hypothesis_id        | uuid                     | YES
+ runtime_verifications        | verification_method  | text                     | NO
+ runtime_verifications        | verification_notes   | text                     | YES
+ runtime_verifications        | status               | text                     | YES
+ runtime_verifications        | created_at           | timestamp with time zone | YES
+ runtime_verifications        | created_by           | text                     | YES
+(122 rows)
+
+
+RSOS-060 IST-BEWERTUNG 2026-06-14T20:25:49+00:00
+FOUNDATION STATUS:
+- runtime_sources vorhanden
+- runtime_source_quality vorhanden
+- runtime_source_conflicts vorhanden
+- runtime_evidence vorhanden
+- runtime_fact_sources vorhanden
+- runtime_assumptions vorhanden
+- runtime_verifications vorhanden
+- runtime_verification_results vorhanden
+- runtime_unknowns vorhanden
+- runtime_unknown_dependencies vorhanden
+- runtime_knowledge vorhanden
+
+LUECKEN:
+- runtime_hypotheses fehlt
+- runtime_witnesses fehlt
+- runtime_reports fehlt
+- runtime_report_segments fehlt
+- runtime_extracted_observations fehlt
+- runtime_extracted_facts fehlt
+- runtime_measurements fehlt
+- runtime_outcomes fehlt
+- runtime_chain_of_custody fehlt
+- runtime_forensic_traces fehlt
+
+RSOS-060 MIGRATION UND API CHECK 2026-06-14T20:27:05+00:00
+MIGRATIONEN:
+009_runtime_learning_evidence.sql
+011_runtime_communication_evidence.sql
+019_runtime_knowledge.sql
+019_runtime_knowledge_upgrade.sql
+020_runtime_evidence_foundation.sql
+021_runtime_witness_observation.sql
+022_runtime_assumptions_hypotheses.sql
+023_runtime_verifications.sql
+024_runtime_facts.sql
+025_runtime_unknowns.sql
+026_runtime_source_quality.sql
+027_runtime_fact_acceptance_rules.sql
+028_runtime_fact_confidence.sql
+030_runtime_governance_outcomes.sql
+046_runtime_recovery_verifications.sql
+047_runtime_audit_reports.sql
+
+SERVER ENDPOINT HINWEISE:
+644:    let evidence = {
+653:      evidence = {
+654:        ...evidence,
+663:      evidence = {
+664:        ...evidence,
+672:      evidence = {
+673:        ...evidence,
+682:      evidence = {
+683:        ...evidence,
+693:      evidence
+736:        evidence,
+747:      JSON.stringify(recommendation.evidence || {}),
+1838:        JOIN runtime_recovery_verifications v
+1960:            JOIN runtime_recovery_verifications v
+2255:          FROM runtime_recovery_verifications
+2315:          recovery_verifications: verificationCount,
+2396:          FROM runtime_recovery_verifications
+2431:        recovery_verifications: recoveryVerifications,
+2439:    if (req.method === "POST" && path === "/runtime/evidence") {
+2452:      const evidence_type = body.evidence_type;
+2454:      const evidence_text = body.evidence_text || null;
+2469:      if (!evidence_type) {
+2472:          message: "evidence_type required"
+2476:      const evidence_id =
+2480:      const evidence_hash = createAuditHash({
+2485:        evidence_type,
+2487:        evidence_text,
+2493:        INSERT INTO runtime_evidence (
+2494:          evidence_id,
+2499:          evidence_type,
+2501:          evidence_text,
+2502:          evidence_hash,
+2504:          evidence_status,
+2510:        evidence_id,
+2515:        evidence_type,
+2517:        evidence_text,
+2518:        evidence_hash,
+2527:        event_type: "runtime.evidence.created",
+2529:          evidence_id,
+2530:          evidence_type,
+2532:          evidence_hash
+2537:        evidence: {
+2538:          evidence_id,
+2543:          evidence_type,
+2545:          evidence_hash,
+2547:          evidence_status: "captured",
+2554:    if (req.method === "GET" && path === "/runtime/evidence") {
+2576:          evidence_id,
+2581:          evidence_type,
+2583:          evidence_text,
+2584:          evidence_hash,
+2586:          evidence_status,
+2590:        FROM runtime_evidence
+2599:        evidence: result.rows
+2604:    if (req.method === "POST" && path === "/runtime/witnesses") {
+2617:      const witness_type = body.witness_type;
+2630:      if (!witness_type || !name) {
+2633:          message: "witness_type and name required"
+2637:      const witness_id =
+2642:        INSERT INTO runtime_witnesses (
+2643:          witness_id,
+2645:          witness_type,
+2653:        witness_id,
+2655:        witness_type,
+2664:        object_id: witness_id,
+2665:        event_type: "runtime.witness.created",
+2667:          witness_id,
+2668:          witness_type,
+2676:        witness: {
+2677:          witness_id,
+2679:          witness_type,
+2688:    if (req.method === "GET" && path === "/runtime/witnesses") {
+2710:          witness_id,
+2712:          witness_type,
+2718:        FROM runtime_witnesses
+2727:        witnesses: result.rows
+2731:    if (req.method === "POST" && path === "/runtime/observations") {
+2744:      const witness_id = body.witness_id || null;
+2745:      const evidence_id = body.evidence_id || null;
+2770:        INSERT INTO runtime_observations (
+2773:          witness_id,
+2774:          evidence_id,
+2784:        witness_id,
+2785:        evidence_id,
+2798:          witness_id,
+2799:          evidence_id,
+2808:          witness_id,
+2809:          evidence_id,
+2818:    if (req.method === "GET" && path === "/runtime/observations") {
+2842:          o.witness_id,
+2843:          w.name AS witness_name,
+2844:          w.witness_type,
+2845:          o.evidence_id,
+2846:          e.title AS evidence_title,
+2852:        FROM runtime_observations o
+2853:        LEFT JOIN runtime_witnesses w
+2854:          ON w.witness_id = o.witness_id
+2855:        LEFT JOIN runtime_evidence e
+2856:          ON e.evidence_id = o.evidence_id
+2865:        observations: result.rows
+2870:    if (req.method === "POST" && path === "/runtime/assumptions") {
+2883:      const evidence_id = body.evidence_id || null;
+2908:        INSERT INTO runtime_assumptions (
+2911:          evidence_id,
+2921:        evidence_id,
+2934:          evidence_id,
+2944:          evidence_id,
+2953:    if (req.method === "GET" && path === "/runtime/assumptions") {
+2977:          a.evidence_id,
+2978:          e.title AS evidence_title,
+2984:        FROM runtime_assumptions a
+2985:        LEFT JOIN runtime_evidence e
+2986:          ON e.evidence_id = a.evidence_id
+2995:        assumptions: result.rows
+2999:    if (req.method === "POST" && path === "/runtime/hypotheses") {
+3037:        INSERT INTO runtime_hypotheses (
+3082:    if (req.method === "GET" && path === "/runtime/hypotheses") {
+3113:        FROM runtime_hypotheses h
+3114:        LEFT JOIN runtime_assumptions a
+3124:        hypotheses: result.rows
+3129:    if (req.method === "POST" && path === "/runtime/verifications") {
+3167:        INSERT INTO runtime_verifications (
+3212:    if (req.method === "GET" && path === "/runtime/verifications") {
+3243:        FROM runtime_verifications v
+3244:        LEFT JOIN runtime_hypotheses h
+3254:        verifications: result.rows
+3321:          UPDATE runtime_verifications
+3393:        LEFT JOIN runtime_verifications v
+3395:        LEFT JOIN runtime_hypotheses h
+3410:    if (req.method === "POST" && path === "/runtime/facts") {
+3427:      const evidence_id = body.evidence_id || null;
+3487:        INSERT INTO runtime_facts (
+3509:      if (evidence_id) {
+3515:          INSERT INTO runtime_fact_sources (
+3519:            evidence_id,
+3527:          evidence_id,
+3541:          evidence_id,
+3554:          evidence_id,
+3561:    if (req.method === "GET" && path === "/runtime/facts") {
+3593:        FROM runtime_facts f
+3604:        facts: result.rows
+3609:    if (req.method === "POST" && path === "/runtime/unknowns") {
+3652:        INSERT INTO runtime_unknowns (
+3736:    if (req.method === "GET" && path === "/runtime/unknowns") {
+3779:        FROM runtime_unknowns u
+3791:        unknowns: result.rows
+3912:        LEFT JOIN runtime_sources s
+4048:        LEFT JOIN runtime_sources sa
+4050:        LEFT JOIN runtime_sources sb
+4081:      const minimum_evidence_count = body.minimum_evidence_count || null;
+4082:      const maximum_open_unknowns = body.maximum_open_unknowns === undefined ? null : body.maximum_open_unknowns;
+4112:          minimum_evidence_count,
+4113:          maximum_open_unknowns,
+4125:        minimum_evidence_count,
+4126:        maximum_open_unknowns,
+4141:          minimum_evidence_count,
+4142:          maximum_open_unknowns,
+4155:          minimum_evidence_count,
+4156:          maximum_open_unknowns,
+4191:          minimum_evidence_count,
+4192:          maximum_open_unknowns,
+4211:    if (req.method === "POST" && path === "/runtime/facts/validate") {
+4240:        FROM runtime_facts f
+4281:        FROM runtime_unknowns
+4300:      const evidenceResult = await db.query(`
+4302:        FROM runtime_fact_sources
+4320:      const evidenceCount = Number(evidenceResult.rows[0].count || 0);
+4334:        evidence_count:
+4335:          evidenceCount >= Number(rule.minimum_evidence_count || 0),
+4337:        open_unknowns:
+4338:          openUnknowns <= Number(rule.maximum_open_unknowns ?? 999999),
+4348:        evidence_count: "minimum_evidence_count_not_met",
+4349:        open_unknowns: "maximum_open_unknowns_exceeded",
+4390:          evidence_count: evidenceCount,
+4391:          open_unknowns: openUnknowns,
+4400:    if (req.method === "POST" && path === "/runtime/facts/calculate-confidence") {
+4429:        FROM runtime_facts f
+4455:      const evidenceResult = await db.query(`
+4457:        FROM runtime_fact_sources
+4467:        FROM runtime_unknowns
+4492:      const evidenceCount =
+4493:        Number(evidenceResult.rows[0].count || 0);
+4501:      const evidenceFactor =
+4502:        Math.min(1, evidenceCount / 3);
+4513:        (evidenceFactor * 0.25) -
+4540:        formula: "verification*0.45 + source_quality*0.30 + evidence_factor*0.25 - unknown_penalty - conflict_penalty",
+4543:        evidence_count: evidenceCount,
+4544:        evidence_factor: evidenceFactor,
+4545:        open_unknowns: openUnknowns,
+4643:    if (req.method === "POST" && path === "/runtime/facts/governance-check") {
+4824:    if (req.method === "POST" && path === "/runtime/governance-outcomes") {
+4864:        INSERT INTO runtime_governance_outcomes (
+4916:    if (req.method === "GET" && path === "/runtime/governance-outcomes") {
+4950:        FROM runtime_governance_outcomes o
+4961:        governance_outcomes: result.rows
+5000:        FROM runtime_governance_outcomes o
+5050:          recommended_action = "Review penalty weights and evidence factors for similar cases.";
+5571:        INSERT INTO runtime_assumptions (
+5594:        INSERT INTO runtime_hypotheses (
+6454:        FROM runtime_facts f
+6504:        FROM runtime_unknowns
+6539:      const open_unknowns =
+6546:        Math.min(0.50, open_unknowns * 0.10);
+6571:        open_unknowns === 0 &&
+6614:        open_unknowns,
+6638:          open_unknowns,
+6660:        open_unknowns,
+6738:          open_unknowns,
+7502:        const evidence_id =
+7506:          INSERT INTO runtime_learning_evidence (
+7507:            evidence_id,
+7519:          evidence_id,
+7531:          evidence_id,
+7550:          event_type: "runtime.learning.evidence.created",
+7551:          message: `Learning evidence created: ${effectiveness}`
+7592:          learning_evidence_id: learningEvidence ? learningEvidence.evidence_id : null
+7639:        learning_evidence_created: learningEvidence !== null,
+7640:        learning_evidence: learningEvidence,
+7703:      const acknowledged_by =
+7709:          status = 'acknowledged',
+7710:          acknowledged_by = $1,
+7711:          acknowledged_at = now()
+7716:        acknowledged_by,
+7721:      const acknowledgedCommunication = updateResult.rows[0];
+7725:        object_id: acknowledgedCommunication.receiver_id,
+7726:        event_type: "runtime.communication.acknowledged",
+7727:        message: `Communication acknowledged: ${acknowledgedCommunication.message_type}`
+7731:        acknowledged: true,
+7732:        communication: acknowledgedCommunication
+8284:          evidence,
+8427:          communication_evidence_id,
+8437:        FROM runtime_communication_evidence
+8446:      const evidence_count = result.rows.length;
+8468:        evidence_count > 0
+8469:          ? Math.round((positive_count / evidence_count) * 1000) / 10
+8478:            evidence_count: 0,
+8491:        entry.evidence_count += 1;
+8516:        evidence_count,
+8524:        evidence: result.rows
+8595:      const acknowledgedAt = communication.acknowledged_at ? new Date(communication.acknowledged_at).getTime() : null;
+8599:        createdAt && acknowledgedAt
+8600:          ? Math.round((acknowledgedAt - createdAt) / 1000)
+8624:          acknowledged: communication.acknowledged_at !== null,
+8625:          acknowledged_by: communication.acknowledged_by,
+8626:          acknowledged_at: communication.acknowledged_at,
+8687:      if (communicationEvent.status !== "acknowledged") {
+8689:          error: "communication_event_not_acknowledged",
+8716:      const acknowledgedAt = completedCommunication.acknowledged_at ? new Date(completedCommunication.acknowledged_at).getTime() : null;
+8720:        createdAt && acknowledgedAt
+8721:          ? Math.round((acknowledgedAt - createdAt) / 1000)
+8731:      const communication_evidence_id =
+8735:        INSERT INTO runtime_communication_evidence (
+8736:          communication_evidence_id,
+8749:        communication_evidence_id,
+8764:        event_type: "runtime.communication.evidence.created",
+8765:        message: `Communication evidence created: ${communicationEffectiveness}`
+8778:        communication_evidence_created: true,
+8779:        communication_evidence: {
+8780:          communication_evidence_id,
+8908:        FROM runtime_learning_evidence
+8917:      const evidence_count = result.rows.length;
+8928:        evidence_count > 0
+8929:          ? Math.round((positive_count / evidence_count) * 1000) / 10
+8938:            evidence_count: 0,
+8948:        entry.evidence_count += 1;
+8963:        evidence_count,
+8975:    if (req.method === "GET" && path.startsWith("/runtime/learning-evidence/")) {
+8991:        path.replace("/runtime/learning-evidence/", "")
+9002:          evidence_id,
+9011:        FROM runtime_learning_evidence
+9032:        evidence_count: result.rows.length,
+9037:        evidence: result.rows
+9431:        let evidence = {
+9440:          evidence = {
+9441:            ...evidence,
+9450:          evidence = {
+9451:            ...evidence,
+9459:          evidence = {
+9460:            ...evidence,
+9469:          evidence = {
+9470:            ...evidence,
+9480:          evidence
+9523:            evidence,
+9534:          JSON.stringify(recommendation.evidence || {}),
+9653:          evidence: recommendation.evidence
+9900:      const evidence = recommendation.evidence || {};
+9901:      const rule_id = evidence.rule_id || null;
+9978:          evidence_id,
+9987:        FROM runtime_learning_evidence
+10035:        learning_evidence: {
+10036:          evidence_count: learningEvidenceResult.rows.length,
+10081:          evidence,
+10213:        FROM runtime_learning_evidence
+10297:        learning_evidence: {
+11779:      const evidenceSummary = await db.query(`
+11781:          COUNT(*)::int AS evidence_count,
+11784:        FROM runtime_learning_evidence
+11788:      const evidence = evidenceSummary.rows[0];
+11791:        evidence.evidence_count > 0
+11793:              (evidence.positive_count / evidence.evidence_count) * 100
+11805:        learning_evidence_count: evidence.evidence_count,
+11806:        total_gap_reduction: evidence.total_gap_reduction,
+11854:            AND evidence->>'competency_name' = $4
+11875:        const evidence = {
+11893:            evidence,
+11904:          JSON.stringify(evidence),
+11941:    if (req.method === "POST" && path === "/runtime/knowledge") {
+11960:      const knowledge_id =
+11961:        body.knowledge_id ||
+11964:      const knowledge_type = body.knowledge_type;
+11965:      const parent_knowledge_id = body.parent_knowledge_id || null;
+11978:      if (!tenant_id || !knowledge_type || !title) {
+11980:          error: "missing_required_knowledge_fields",
+11983:            "knowledge_type",
+11990:        SELECT knowledge_id
+11991:        FROM runtime_knowledge
+11992:        WHERE knowledge_id = $1
+11994:      `, [knowledge_id]);
+11998:          error: "knowledge_already_exists",
+11999:          knowledge_id
+12007:        INSERT INTO runtime_knowledge (
+12008:          knowledge_id,
+12011:          knowledge_type,
+12012:          parent_knowledge_id,
+12025:        knowledge_id,
+12028:        knowledge_type,
+12029:        parent_knowledge_id,
+12041:        event_type: "runtime.knowledge.created",
+12042:        object_id: knowledge_id,
+12049:        knowledge: insertResult.rows[0]
+12054:    if (req.method === "GET" && path === "/runtime/knowledge") {
+12074:      const knowledge_type = urlObj.searchParams.get("knowledge_type");
+12075:      const parent_knowledge_id = urlObj.searchParams.get("parent_knowledge_id");
+12080:      if (knowledge_type) {
+12081:        params.push(knowledge_type);
+12082:        where += " AND knowledge_type = $" + params.length;
+12085:      if (parent_knowledge_id) {
+12086:        params.push(parent_knowledge_id);
+12087:        where += " AND parent_knowledge_id = $" + params.length;
+12092:          knowledge_id,
+12095:          knowledge_type,
+12096:          parent_knowledge_id,
+12108:        FROM runtime_knowledge
+12121:    if (req.method === "GET" && path.startsWith("/runtime/knowledge/")) {
+12134:      const knowledge_id = decodeURIComponent(
+12135:        path.replace("/runtime/knowledge/", "")
+12138:      if (!knowledge_id) {
+12140:          error: "missing_knowledge_id"
+12146:        FROM runtime_knowledge
+12147:        WHERE knowledge_id = $1
+12149:      `, [knowledge_id]);
+12153:          error: "knowledge_not_found",
+12154:          knowledge_id
+12158:      const knowledge = result.rows[0];
+12160:      if (auth.user.scope !== "global" && knowledge.tenant_id !== auth.user.tenant_id) {
+12168:          knowledge_id,
+12169:          knowledge_type,
+12175:        FROM runtime_knowledge
+12177:          AND parent_knowledge_id = $2
+12180:        knowledge.tenant_id,
+12181:        knowledge.knowledge_id
+12185:        knowledge,
+12218:          (SELECT COUNT(*)::int FROM runtime_learning_evidence) AS learning_evidence_count,
+12237:          COALESCE(le.learning_evidence, 0)::int AS learning_evidence,
+12273:          SELECT tenant_id, COUNT(*) AS learning_evidence
+12274:          FROM runtime_learning_evidence
+12782:            COALESCE(le.learning_evidence, 0)::int AS learning_evidence,
+12837:            SELECT tenant_id, COUNT(*) AS learning_evidence
+12838:            FROM runtime_learning_evidence
+13033:          (SELECT COUNT(*)::int FROM runtime_learning_evidence WHERE tenant_id = $1) AS learning_evidence,
+13048:      const evidenceResult = await db.query(`
+13050:          COUNT(*)::int AS evidence_count,
+13053:        FROM runtime_learning_evidence
+13057:      const evidence = evidenceResult.rows[0];
+13060:        evidence.evidence_count > 0
+13061:          ? Math.round((evidence.positive_count / evidence.evidence_count) * 100)
+13081:          evidence_count: evidence.evidence_count,
+13082:          total_gap_reduction: evidence.total_gap_reduction,
+15703:    if (req.method === "POST" && path === "/runtime/defense/recovery-verifications") {
+15755:        INSERT INTO runtime_recovery_verifications (
+15807:    if (req.method === "GET" && path === "/runtime/defense/recovery-verifications") {
+15823:        FROM runtime_recovery_verifications
+15832:        recovery_verifications: result.rows
+15836:    if (req.method === "POST" && path.startsWith("/runtime/defense/recovery-verifications/") && path.endsWith("/close")) {
+15847:        .replace("/runtime/defense/recovery-verifications/", "")
+15855:        UPDATE runtime_recovery_verifications
+15965:          FROM runtime_recovery_verifications
+16143:    if (req.method === "POST" && path === "/runtime/audit-reports/generate") {
+16212:        FROM runtime_recovery_verifications
+16232:          purpose: "Defense and recovery audit evidence snapshot",
+16241:        recovery_verifications: verificationResult.rows
+16245:        INSERT INTO runtime_audit_reports (
+16280:    if (req.method === "GET" && path === "/runtime/audit-reports") {
+16304:        FROM runtime_audit_reports
+16313:        audit_reports: result.rows
+16317:    if (req.method === "GET" && path.startsWith("/runtime/audit-reports/")) {
+16328:      const report_id = path.replace("/runtime/audit-reports/", "");
+16333:        FROM runtime_audit_reports
+
+RSOS-060 REALITAETSABGLEICH 2026-06-14T20:28:06+00:00
+ERGEBNIS:
+- runtime_witnesses API vorhanden
+- runtime_observations API vorhanden
+- runtime_hypotheses API vorhanden
+- runtime_facts API vorhanden
+
+ABWEICHUNG ZUR TABELLENPRUEFUNG:
+- API erwartet Tabellen, die in der bisherigen Tabellenliste nicht sichtbar waren.
+- Wahrscheinlich existieren weitere Tabellen, wurden aber durch den vorherigen Filter nicht erfasst.
+          table_name           |           column_name           |        data_type         | is_nullable 
+-------------------------------+---------------------------------+--------------------------+-------------
+ runtime_fact_acceptance_rules | rule_id                         | uuid                     | NO
+ runtime_fact_acceptance_rules | tenant_id                       | text                     | NO
+ runtime_fact_acceptance_rules | rule_name                       | text                     | NO
+ runtime_fact_acceptance_rules | minimum_verification_confidence | numeric                  | YES
+ runtime_fact_acceptance_rules | minimum_source_quality          | numeric                  | YES
+ runtime_fact_acceptance_rules | minimum_evidence_count          | integer                  | YES
+ runtime_fact_acceptance_rules | maximum_open_unknowns           | integer                  | YES
+ runtime_fact_acceptance_rules | maximum_open_conflicts          | integer                  | YES
+ runtime_fact_acceptance_rules | enabled                         | boolean                  | YES
+ runtime_fact_acceptance_rules | created_at                      | timestamp with time zone | YES
+ runtime_fact_acceptance_rules | created_by                      | text                     | YES
+ runtime_fact_confidence       | confidence_id                   | uuid                     | NO
+ runtime_fact_confidence       | tenant_id                       | text                     | NO
+ runtime_fact_confidence       | fact_id                         | uuid                     | YES
+ runtime_fact_confidence       | confidence_score                | numeric                  | YES
+ runtime_fact_confidence       | trust_level                     | text                     | YES
+ runtime_fact_confidence       | calculation_details             | jsonb                    | YES
+ runtime_fact_confidence       | calculated_at                   | timestamp with time zone | YES
+ runtime_fact_confidence       | calculated_by                   | text                     | YES
+ runtime_facts                 | fact_id                         | uuid                     | NO
+ runtime_facts                 | tenant_id                       | text                     | NO
+ runtime_facts                 | verification_result_id          | uuid                     | YES
+ runtime_facts                 | fact_text                       | text                     | NO
+ runtime_facts                 | confidence                      | numeric                  | YES
+ runtime_facts                 | fact_status                     | text                     | YES
+ runtime_facts                 | created_at                      | timestamp with time zone | YES
+ runtime_facts                 | created_by                      | text                     | YES
+ runtime_hypotheses            | hypothesis_id                   | uuid                     | NO
+ runtime_hypotheses            | tenant_id                       | text                     | NO
+ runtime_hypotheses            | assumption_id                   | uuid                     | YES
+ runtime_hypotheses            | hypothesis_text                 | text                     | NO
+ runtime_hypotheses            | confidence                      | numeric                  | YES
+ runtime_hypotheses            | verification_status             | text                     | YES
+ runtime_hypotheses            | created_at                      | timestamp with time zone | YES
+ runtime_hypotheses            | created_by                      | text                     | YES
+ runtime_observations          | observation_id                  | uuid                     | NO
+ runtime_observations          | tenant_id                       | text                     | NO
+ runtime_observations          | witness_id                      | uuid                     | YES
+ runtime_observations          | evidence_id                     | uuid                     | YES
+ runtime_observations          | observation_text                | text                     | NO
+ runtime_observations          | observation_time                | timestamp with time zone | YES
+ runtime_observations          | confidence                      | numeric                  | YES
+ runtime_observations          | created_at                      | timestamp with time zone | YES
+ runtime_observations          | created_by                      | text                     | YES
+ runtime_witnesses             | witness_id                      | uuid                     | NO
+ runtime_witnesses             | tenant_id                       | text                     | NO
+ runtime_witnesses             | witness_type                    | text                     | NO
+ runtime_witnesses             | name                            | text                     | NO
+ runtime_witnesses             | role                            | text                     | YES
+ runtime_witnesses             | reliability_score               | numeric                  | YES
+ runtime_witnesses             | created_at                      | timestamp with time zone | YES
+ runtime_witnesses             | created_by                      | text                     | YES
+(52 rows)
+
+ table_name 
+------------
+(0 rows)
+
+
+RSOS-060 FINALER IST-ZUSTAND 2026-06-14T20:30:18+00:00
+VORHANDEN:
+- Sources / Source Quality / Source Conflicts
+- Evidence / Fact Sources
+- Witnesses / Observations
+- Assumptions / Hypotheses
+- Verifications / Verification Results
+- Facts / Fact Acceptance Rules / Fact Confidence
+- Unknowns / Unknown Dependencies
+- Knowledge
+
+ECHTE RESTLUECKEN:
+- runtime_reports
+- runtime_report_segments
+- runtime_measurements
+- runtime_outcomes
+- runtime_chain_of_custody
+- runtime_forensic_traces
+
+BEWERTUNG:
+RSOS-060 Knowledge & Evidence Foundation ist in Kernstruktur vorhanden.
+Naechster sinnvoller Schritt: Reports und Report Segments ergaenzen, weil Berichte als komprimierte Wissensartefakte in Observations, Evidence, Facts, Assumptions und Hypotheses zerlegt werden sollen.
+       table_name        |      column_name      |        data_type         | is_nullable 
+-------------------------+-----------------------+--------------------------+-------------
+ runtime_report_segments | segment_id            | uuid                     | NO
+ runtime_report_segments | tenant_id             | text                     | NO
+ runtime_report_segments | report_id             | uuid                     | YES
+ runtime_report_segments | segment_type          | text                     | NO
+ runtime_report_segments | segment_text          | text                     | NO
+ runtime_report_segments | linked_observation_id | uuid                     | YES
+ runtime_report_segments | linked_evidence_id    | uuid                     | YES
+ runtime_report_segments | linked_fact_id        | uuid                     | YES
+ runtime_report_segments | linked_assumption_id  | uuid                     | YES
+ runtime_report_segments | linked_hypothesis_id  | uuid                     | YES
+ runtime_report_segments | confidence            | numeric                  | YES
+ runtime_report_segments | segment_status        | text                     | YES
+ runtime_report_segments | created_at            | timestamp with time zone | YES
+ runtime_report_segments | created_by            | text                     | YES
+ runtime_reports         | report_id             | uuid                     | NO
+ runtime_reports         | tenant_id             | text                     | NO
+ runtime_reports         | source_id             | uuid                     | YES
+ runtime_reports         | evidence_id           | uuid                     | YES
+ runtime_reports         | report_type           | text                     | NO
+ runtime_reports         | title                 | text                     | NO
+ runtime_reports         | report_text           | text                     | YES
+ runtime_reports         | report_status         | text                     | YES
+ runtime_reports         | report_hash           | text                     | YES
+ runtime_reports         | received_at           | timestamp with time zone | YES
+ runtime_reports         | created_at            | timestamp with time zone | YES
+ runtime_reports         | created_by            | text                     | YES
+(26 rows)
+
+
+RSOS-060 REPORTS API CHECK 2026-06-14T20:51:46+00:00
+ERGEBNIS: Reports API Block vollstaendig eingefuegt.
+- POST /runtime/reports vorhanden
+- GET /runtime/reports vorhanden
+- POST /runtime/report-segments vorhanden
+- GET /runtime/report-segments vorhanden
+- Danach laeuft server.js sauber mit /runtime/witnesses weiter.
+
+RSOS-060 RUNTIME START FEHLER 2026-06-14T20:54:23+00:00
+ERGEBNIS: rsos-runtime-api konnte wegen Docker iptables/NAT-Chain Fehler nicht neu starten.
+WICHTIG: Das ist aktuell Infrastruktur/Netzwerk, nicht Reports-API-Syntax.
+
+RSOS-060 RUNTIME NACH START PRUEFEN 2026-06-14T20:55:21+00:00
+NAMES                                         STATUS                        PORTS
+rsos-runtime-api-recovery                     Exited (1) 57 seconds ago     
+rsos-runtime-api                              Restarting (1) 1 second ago   
+rsos-runtime-api-before-env-20260528_203541   Exited (137) 2 weeks ago      
+rsos-postgres                                 Up 56 seconds                 127.0.0.1:5432->5432/tcp
+rsos-redis                                    Up 56 seconds                 127.0.0.1:6379->6379/tcp
+
+LOGS rsos-runtime-api:
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+
+RSOS-060 FEHLERBEWERTUNG 2026-06-14T20:57:41+00:00
+ERGEBNIS: Runtime startet, bricht aber wegen fehlender DB-Spalte ab.
+URSACHE: runtime_governance_decisions.decision_type fehlt.
+HINWEIS: Reports-API ist nicht die erkannte Absturzursache.
+
+RSOS-060 DOCKER DNS CHECK 2026-06-14T21:06:19+00:00
+ERGEBNIS: Runtime findet Hostname rsos-postgres nicht.
+MASSNAHME: Container-Netzwerkzuordnung pruefen.
+{}
+
+{"rsos_default":{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"d9baa6501f0c2bf6ab7f5a47728bd735214f98d4f0b685b8fe7867e4ec784f0e","EndpointID":"0574b21629c949181a2a8b64b02e8c82ace058db9a414470430e24297bc640c0","Gateway":"172.20.0.1","IPAddress":"172.20.0.2","MacAddress":"52:5a:79:e8:79:90","IPPrefixLen":16,"IPv6Gateway":"","GlobalIPv6Address":"","GlobalIPv6PrefixLen":0,"DNSNames":["rsos-postgres","fade5e5d6697"]}}
+
+RSOS-060 RUNTIME WIEDERHERGESTELLT 2026-06-14T21:11:39+00:00
+ERGEBNIS: rsos-runtime-api laeuft wieder.
+HEALTH: Runtime healthy, Database connected.
+HINWEIS: Docker network connect meldete alten Sandbox-Fehler, Start war dennoch erfolgreich.
+
+RSOS-060 REPORTS TIMEOUT CHECK 2026-06-14T21:17:16+00:00
+ERGEBNIS: POST /runtime/reports erreicht den Server, antwortet aber nicht innerhalb 10 Sekunden.
+MASSNAHME: Logs und aktive DB-Abfragen pruefen.
+
+API LOGS:
+Database initialized
+RS OS Runtime active on port 8080
+
+POSTGRES ACTIVE QUERIES:
+ pid | state  | wait_event_type | wait_event |                                     query                                     
+-----+--------+-----------------+------------+-------------------------------------------------------------------------------
+ 433 | active |                 |            |                                                                              +
+     |        |                 |            |     SELECT pid, state, wait_event_type, wait_event, left(query, 300) AS query+
+     |        |                 |            |     FROM pg_stat_activity                                                    +
+     |        |                 |            |     WHERE datname='rsos_runtime'                                             +
+     |        |                 |            |     ORDER BY query_start DESC                                                +
+     |        |                 |            |     LIMIT 20;                                                                +
+     |        |                 |            |   
+ 243 | idle   | Client          | ClientRead | COMMIT
+(2 rows)
+
+
+RSOS-060 DB CLIENT BEWERTUNG 2026-06-14T21:25:16+00:00
+ERGEBNIS: server.js nutzt globalen pg Client, keinen Pool.
+RISIKO: Parallele Requests koennen blockieren; Warnung pg@9 bestaetigt das.
+MASSNAHME: Runtime einmal sauber neu starten, dann Einzeltest direkt nach Neustart.
+
+RSOS-060 REPORTS GET TIMEOUT NACH POOL 2026-06-14T21:35:19+00:00
+ERGEBNIS: Pool-Umbau allein loest Timeout nicht.
+MASSNAHME: Pruefen, ob neuer Code wirklich im Container aktiv ist und ob Request in Auth oder Handler haengt.
+
+
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+Database initialized
+RS OS Runtime active on port 8080
+
+RSOS-060 CONTAINER CODE ABGLEICH 2026-06-14T21:36:32+00:00
+ERGEBNIS: grep im Container lieferte keine Treffer; wahrscheinlich laeuft alter /app/server.js Code.
+MASSNAHME: Compose/Container Mounts pruefen.
+
+HOST CODE:
+5:const { Pool } = require("pg");
+16:const db = new Pool({
+2603:    if (req.method === "POST" && path === "/runtime/reports") {
+2702:    if (req.method === "GET" && path === "/runtime/reports") {
+
+CONTAINER CODE:
+
+COMPOSE RUNTIME API:
+17-    container_name: rsos-redis
+18-    restart: unless-stopped
+19-    ports:
+20-      - "6379:6379"
+21-
+22:  runtime-api:
+23:    build: ./runtime-api
+24:    container_name: rsos-runtime-api
+25-    restart: unless-stopped
+26-    environment:
+27-      DB_HOST: rsos-postgres
+28-      DB_USER: rsos
+29-      DB_PASSWORD: rsos_secure_2026
+30-      DB_NAME: rsos_runtime
+31-      JWT_SECRET: RSOS_SECURE_RUNTIME_2026
+32-    ports:
+33-      - "8080:8080"
+
+RSOS-060 CONTAINER CODE STATUS 2026-06-14T21:37:27+00:00
+ERGEBNIS: Host-Code enthaelt Pool und Reports-Endpunkte; Container-Code enthaelt sie nicht.
+URSACHE: docker-compose baut ./runtime-api ins Image, kein Live-Volume-Mount.
+MASSNAHME: runtime-api Image neu bauen und Container neu starten.
+
+RSOS-060 DOCKER-COMPOSE BUILD 2026-06-14T21:39:00+00:00
+ERGEBNIS: docker-compose ist vorhanden: /usr/bin/docker-compose
+MASSNAHME: runtime-api Image mit docker-compose neu bauen.
+
+RSOS-060 COMPOSE RECREATE FEHLER 2026-06-14T21:40:31+00:00
+ERGEBNIS: Image wurde erfolgreich gebaut, aber docker-compose recreate scheitert mit ContainerConfig.
+MASSNAHME: Container manuell aus neuem Image rsos_runtime-api:latest starten.
+
+RSOS-060 ABSCHLUSS 2026-06-14T21:45:09+00:00
+ERGEBNIS: Reports Foundation erfolgreich umgesetzt und getestet.
+- runtime_reports angelegt
+- runtime_report_segments angelegt
+- POST /runtime/reports erfolgreich
+- GET /runtime/reports erfolgreich
+- POST /runtime/report-segments erfolgreich
+- GET /runtime/report-segments erfolgreich
+- Runtime API auf pg Pool umgestellt
+- Container aus neu gebautem Image manuell wiederhergestellt
+TEST_REPORT_ID: 00000000-0000-4000-8000-7c79f70c4695
+TEST_SEGMENT_ID: 00000000-0000-4000-8000-daed3d0a94b7
+
+RSOS-060 DIFF BEWERTUNG 2026-06-14T21:48:53+00:00
+ERGEBNIS: Diff zeigt neben Pool/Reports auch grosse Defense-Pipeline-Verschiebung.
+RISIKO: server.js enthaelt moeglicherweise bereits uncommitted Vorarbeiten; nicht blind committen.
+MASSNAHME: RSOS-060 relevante Aenderungen getrennt dokumentieren und Dateibloecke gezielt pruefen.
+
+RSOS-060 COMMIT ABGRENZUNG 2026-06-14T21:55:25+00:00
+ERGEBNIS: executeDefensePipeline war bereits vor RSOS-060 vorhanden.
+RSOS-060 relevante server.js-Aenderung: Client -> Pool plus Reports-Endpunkte.
+RSOS-060 relevante Migrationen:
+- runtime-api/migrations/029_runtime_reports.sql
+- runtime-api/migrations/031_runtime_governance_decision_type_fix.sql
