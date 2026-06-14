@@ -1,0 +1,18 @@
+RS OS Tenant Dashboard
+
+STATUS=GREEN
+
+GENERATED_AT=2026-06-14T19:15:01Z
+
+TENANT_OVERVIEW:
+            tenant_id            |                    tenant_name                     |       tenant_type        | status | objects | events | members 
+---------------------------------+----------------------------------------------------+--------------------------+--------+---------+--------+---------
+ tenant-alali24                  | ALALI24                                            | digital_platform         | active |       0 |      0 |       0
+ tenant-berufsbildung-sicherheit | Berufsbildung Sicherheit                           | security_education       | active |       0 |     15 |       1
+ tenant-bibu-rudolph             | BiBu Rudolph                                       | accounting_service       | active |       0 |     92 |       0
+ tenant-demo-control             | Demo Control Tenant                                | demo                     | active |       0 |      0 |       1
+ tenant-demo-control-1780577120  | Demo Control Tenant tenant-demo-control-1780577120 | demo                     | active |       0 |      0 |       0
+ tenant-psgarage                 | PS Garage Tübingen                                 | automotive_service       | active |       0 |      0 |       1
+ tenant-rudolph-admin            | Rudolph Buchhaltung                                | tenant_management_portal | active |       2 |   9366 |       2
+(7 rows)
+
