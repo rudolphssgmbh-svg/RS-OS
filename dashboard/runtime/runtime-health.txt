@@ -1,0 +1,19 @@
+RS OS Runtime Health Dashboard
+
+STATUS=GREEN
+
+API_HEALTH={"timestamp":"2026-06-14T09:00:01.504Z","status":"ok","runtime":"healthy","database":"connected"}
+
+CONTAINERS:
+rsos-runtime-api=running
+rsos-runtime-api-recovery=running
+rsos-postgres=running
+rsos-redis=running
+
+RUNTIME_COUNTS:
+runtime_events=9721
+runtime_objects=9
+runtime_tenants=7
+runtime_audit_reports=13
+
+GENERATED_AT=2026-06-14T09:00:02Z

@@ -14,3 +14,6 @@ runtime-api/.env
 runtime-api/server.before-*
 runtime-api/server.js.bak
 runtime-api/server.js.save.*
+
+# RSOS runtime generated logs
+runtime-api/scripts/**/*.log
