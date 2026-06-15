@@ -1,0 +1,228 @@
+
+RSOS-060A RUNTIME API BOUNDARY AUDIT 2026-06-14T22:51:11+00:00
+ZIEL: server.js Ist-Zustand vor weiterer Entwicklung abgrenzen.
+COMMIT_HEAD: ce89a8c RSOS-060 document outcome measurement API test
+BRANCH: master
+
+AKTIVER CONTAINER CODE:
+5:const { Pool } = require("pg");
+16:const db = new Pool({
+2603:    if (req.method === "POST" && path === "/runtime/reports") {
+2702:    if (req.method === "GET" && path === "/runtime/reports") {
+2905:    if (req.method === "POST" && path === "/runtime/outcomes") {
+2958:    if (req.method === "GET" && path === "/runtime/outcomes") {
+2976:    if (req.method === "POST" && path === "/runtime/measurements") {
+3027:    if (req.method === "GET" && path === "/runtime/measurements") {
+
+HOST SERVER STATUS:
+
+SERVER DIFF STAT:
+ runtime-api/server.js | 21108 +++++++++++++++++++++++++++++-------------------
+ 1 file changed, 12719 insertions(+), 8389 deletions(-)
+
+RSOS-060A ENDPOINT INVENTAR 2026-06-14T22:52:52+00:00
+ZIEL: Alle path-basierten Runtime-Endpunkte aus server.js extrahieren.
+
+893:      path === "/runtime/incidents"
+1796:      path === "/runtime/incidents/metrics"
+1870:      path === "/runtime/incidents/search"
+1928:      path === "/runtime/incidents/completeness"
+2016:      path === "/runtime/incidents/dashboard"
+2100:      path === "/runtime/incidents"
+2437:    if (req.method === "POST" && path === "/runtime/evidence") {
+2552:    if (req.method === "GET" && path === "/runtime/evidence") {
+2603:    if (req.method === "POST" && path === "/runtime/reports") {
+2702:    if (req.method === "GET" && path === "/runtime/reports") {
+2749:    if (req.method === "POST" && path === "/runtime/report-segments") {
+2847:    if (req.method === "GET" && path === "/runtime/report-segments") {
+2905:    if (req.method === "POST" && path === "/runtime/outcomes") {
+2958:    if (req.method === "GET" && path === "/runtime/outcomes") {
+2976:    if (req.method === "POST" && path === "/runtime/measurements") {
+3027:    if (req.method === "GET" && path === "/runtime/measurements") {
+3055:    if (req.method === "POST" && path === "/runtime/witnesses") {
+3139:    if (req.method === "GET" && path === "/runtime/witnesses") {
+3182:    if (req.method === "POST" && path === "/runtime/observations") {
+3269:    if (req.method === "GET" && path === "/runtime/observations") {
+3321:    if (req.method === "POST" && path === "/runtime/assumptions") {
+3404:    if (req.method === "GET" && path === "/runtime/assumptions") {
+3450:    if (req.method === "POST" && path === "/runtime/hypotheses") {
+3533:    if (req.method === "GET" && path === "/runtime/hypotheses") {
+3580:    if (req.method === "POST" && path === "/runtime/verifications") {
+3663:    if (req.method === "GET" && path === "/runtime/verifications") {
+3709:    if (req.method === "POST" && path === "/runtime/verification-results") {
+3810:    if (req.method === "GET" && path === "/runtime/verification-results") {
+3861:    if (req.method === "POST" && path === "/runtime/facts") {
+4012:    if (req.method === "GET" && path === "/runtime/facts") {
+4060:    if (req.method === "POST" && path === "/runtime/unknowns") {
+4187:    if (req.method === "GET" && path === "/runtime/unknowns") {
+4247:    if (req.method === "POST" && path === "/runtime/source-quality") {
+4330:    if (req.method === "GET" && path === "/runtime/source-quality") {
+4377:    if (req.method === "POST" && path === "/runtime/source-conflicts") {
+4465:    if (req.method === "GET" && path === "/runtime/source-conflicts") {
+4516:    if (req.method === "POST" && path === "/runtime/fact-acceptance-rules") {
+4615:    if (req.method === "GET" && path === "/runtime/fact-acceptance-rules") {
+4662:    if (req.method === "POST" && path === "/runtime/facts/validate") {
+4851:    if (req.method === "POST" && path === "/runtime/facts/calculate-confidence") {
+5050:    if (req.method === "GET" && path === "/runtime/fact-confidence") {
+5094:    if (req.method === "POST" && path === "/runtime/facts/governance-check") {
+5229:    if (req.method === "GET" && path === "/runtime/governance-checks") {
+5275:    if (req.method === "POST" && path === "/runtime/governance-outcomes") {
+5367:    if (req.method === "GET" && path === "/runtime/governance-outcomes") {
+5417:    if (req.method === "POST" && path === "/runtime/lessons-learned/generate") {
+5574:    if (req.method === "GET" && path === "/runtime/lessons-learned") {
+5622:    if (req.method === "POST" && path === "/runtime/heuristics") {
+5718:    if (req.method === "GET" && path === "/runtime/heuristics") {
+5767:    if (req.method === "POST" && path === "/runtime/heuristic-triggers") {
+5898:    if (req.method === "GET" && path === "/runtime/heuristic-triggers") {
+5950:    if (req.method === "POST" && path === "/runtime/heuristic-triggers/materialize") {
+6105:    if (req.method === "POST" && path === "/runtime/heuristic-feedback") {
+6277:    if (req.method === "GET" && path === "/runtime/heuristic-feedback") {
+6327:    if (req.method === "POST" && path === "/runtime/patterns") {
+6418:    if (req.method === "GET" && path === "/runtime/patterns") {
+6466:    if (req.method === "POST" && path === "/runtime/pattern-matches") {
+6594:    if (req.method === "GET" && path === "/runtime/pattern-matches") {
+6650:    if (req.method === "POST" && path === "/runtime/pattern-feedback") {
+6822:    if (req.method === "GET" && path === "/runtime/pattern-feedback") {
+6872:    if (req.method === "POST" && path === "/runtime/cross-loop-validations") {
+7156:    if (req.method === "GET" && path === "/runtime/cross-loop-validations") {
+7212:    if (req.method === "POST" && path === "/runtime/governance-policies") {
+7309:    if (req.method === "GET" && path === "/runtime/governance-policies") {
+7356:    if (req.method === "POST" && path === "/runtime/objects") {
+7439:if (req.method === "POST" && path === "/runtime/execute") {
+7687:    if (req.method === "GET" && path === "/runtime/objects") {
+7715:    if (req.method === "GET" && path === "/runtime/events") {
+8193:    if (req.method === "POST" && path === "/runtime/orchestrations") {
+8589:    if (req.method === "GET" && path === "/runtime/orchestration-rules") {
+8798:    if (req.method === "GET" && path === "/runtime/orchestrations") {
+9245:    if (req.method === "POST" && path === "/runtime/communications/send") {
+9567:    if (req.method === "GET" && path === "/runtime/competencies/gaps") {
+9676:    if (req.method === "GET" && path === "/runtime/recommendation-rules") {
+11145:    if (req.method === "POST" && path === "/runtime/relations") {
+11279:    if (req.method === "GET" && path === "/runtime/relations") {
+11574:    if (req.method === "POST" && path === "/runtime/tenants") {
+12101:    if (req.method === "POST" && path === "/runtime/training-plans/generate-from-gaps") {
+12197:    if (req.method === "GET" && path === "/runtime/learning/dashboard") {
+12264:    if (req.method === "POST" && path === "/runtime/recommendations/generate-from-gaps") {
+12392:    if (req.method === "POST" && path === "/runtime/knowledge") {
+12505:    if (req.method === "GET" && path === "/runtime/knowledge") {
+12645:    if (req.method === "GET" && path === "/runtime/admin/dashboard") {
+12760:    if (req.method === "POST" && path === "/runtime/admin/tenants") {
+13137:    if (req.method === "GET" && path === "/runtime/admin/tenants") {
+13219:    if (req.method === "GET" && path === "/runtime/dashboard/tenants") {
+13323:    if (req.method === "GET" && path === "/runtime/tenants") {
+13636:    if (req.method === "GET" && path === "/runtime/dashboard") {
+13736:    if (req.method === "POST" && path === "/runtime/schedule") {
+14042:    if (req.method === "POST" && path === "/runtime/worker/run") {
+14601:    if (req.method === "GET" && path === "/runtime/metrics") {
+14662:    if (req.method === "GET" && path === "/runtime/dead-letter") {
+14699:    if (req.method === "POST" && path === "/runtime/dead-letter/requeue") {
+14841:    if (req.method === "POST" && path === "/runtime/defense/ingress") {
+14947:    if (req.method === "GET" && path === "/runtime/defense/ingress") {
+14974:    if (req.method === "POST" && path === "/runtime/defense/shadow-validations") {
+15044:    if (req.method === "GET" && path === "/runtime/defense/shadow-validations") {
+15071:    if (req.method === "POST" && path === "/runtime/defense/quarantine") {
+15133:    if (req.method === "GET" && path === "/runtime/defense/quarantine") {
+15395:    if (req.method === "POST" && path === "/runtime/defense/savepoints") {
+15456:    if (req.method === "GET" && path === "/runtime/defense/savepoints") {
+15638:    if (req.method === "POST" && path === "/runtime/defense/recovery-requests") {
+15689:    if (req.method === "GET" && path === "/runtime/defense/recovery-requests") {
+16154:    if (req.method === "POST" && path === "/runtime/defense/recovery-verifications") {
+16258:    if (req.method === "GET" && path === "/runtime/defense/recovery-verifications") {
+16367:    if (req.method === "POST" && path === "/runtime/defense/metrics/recalculate") {
+16487:    if (req.method === "GET" && path === "/runtime/defense/metrics") {
+16516:    if (req.method === "GET" && path === "/runtime/defense/dashboard") {
+16594:    if (req.method === "POST" && path === "/runtime/audit-reports/generate") {
+16731:    if (req.method === "GET" && path === "/runtime/audit-reports") {
+16805:    if (req.method === "GET" && path === "/runtime/defense/state") {
+16832:    if (req.method === "POST" && path === "/runtime/defense/state") {
+
+RSOS-060A ENDPOINT GRUPPIERUNG 2026-06-14T22:54:42+00:00
+RSOS-060 KNOWLEDGE/EVIDENCE:
+2437:    if (req.method === "POST" && path === "/runtime/evidence") {
+2552:    if (req.method === "GET" && path === "/runtime/evidence") {
+2603:    if (req.method === "POST" && path === "/runtime/reports") {
+2702:    if (req.method === "GET" && path === "/runtime/reports") {
+2749:    if (req.method === "POST" && path === "/runtime/report-segments") {
+2847:    if (req.method === "GET" && path === "/runtime/report-segments") {
+2905:    if (req.method === "POST" && path === "/runtime/outcomes") {
+2958:    if (req.method === "GET" && path === "/runtime/outcomes") {
+2976:    if (req.method === "POST" && path === "/runtime/measurements") {
+3027:    if (req.method === "GET" && path === "/runtime/measurements") {
+3055:    if (req.method === "POST" && path === "/runtime/witnesses") {
+3139:    if (req.method === "GET" && path === "/runtime/witnesses") {
+3182:    if (req.method === "POST" && path === "/runtime/observations") {
+3269:    if (req.method === "GET" && path === "/runtime/observations") {
+3321:    if (req.method === "POST" && path === "/runtime/assumptions") {
+3404:    if (req.method === "GET" && path === "/runtime/assumptions") {
+3450:    if (req.method === "POST" && path === "/runtime/hypotheses") {
+3533:    if (req.method === "GET" && path === "/runtime/hypotheses") {
+3580:    if (req.method === "POST" && path === "/runtime/verifications") {
+3663:    if (req.method === "GET" && path === "/runtime/verifications") {
+3709:    if (req.method === "POST" && path === "/runtime/verification-results") {
+3810:    if (req.method === "GET" && path === "/runtime/verification-results") {
+3861:    if (req.method === "POST" && path === "/runtime/facts") {
+4012:    if (req.method === "GET" && path === "/runtime/facts") {
+4060:    if (req.method === "POST" && path === "/runtime/unknowns") {
+4187:    if (req.method === "GET" && path === "/runtime/unknowns") {
+4247:    if (req.method === "POST" && path === "/runtime/source-quality") {
+4330:    if (req.method === "GET" && path === "/runtime/source-quality") {
+4377:    if (req.method === "POST" && path === "/runtime/source-conflicts") {
+4465:    if (req.method === "GET" && path === "/runtime/source-conflicts") {
+4516:    if (req.method === "POST" && path === "/runtime/fact-acceptance-rules") {
+4615:    if (req.method === "GET" && path === "/runtime/fact-acceptance-rules") {
+4662:    if (req.method === "POST" && path === "/runtime/facts/validate") {
+4851:    if (req.method === "POST" && path === "/runtime/facts/calculate-confidence") {
+5050:    if (req.method === "GET" && path === "/runtime/fact-confidence") {
+
+DEFENSE/RECOVERY:
+14841:    if (req.method === "POST" && path === "/runtime/defense/ingress") {
+14947:    if (req.method === "GET" && path === "/runtime/defense/ingress") {
+14974:    if (req.method === "POST" && path === "/runtime/defense/shadow-validations") {
+15044:    if (req.method === "GET" && path === "/runtime/defense/shadow-validations") {
+15071:    if (req.method === "POST" && path === "/runtime/defense/quarantine") {
+15133:    if (req.method === "GET" && path === "/runtime/defense/quarantine") {
+15395:    if (req.method === "POST" && path === "/runtime/defense/savepoints") {
+15456:    if (req.method === "GET" && path === "/runtime/defense/savepoints") {
+15638:    if (req.method === "POST" && path === "/runtime/defense/recovery-requests") {
+15689:    if (req.method === "GET" && path === "/runtime/defense/recovery-requests") {
+16154:    if (req.method === "POST" && path === "/runtime/defense/recovery-verifications") {
+16258:    if (req.method === "GET" && path === "/runtime/defense/recovery-verifications") {
+16367:    if (req.method === "POST" && path === "/runtime/defense/metrics/recalculate") {
+16487:    if (req.method === "GET" && path === "/runtime/defense/metrics") {
+16516:    if (req.method === "GET" && path === "/runtime/defense/dashboard") {
+16805:    if (req.method === "GET" && path === "/runtime/defense/state") {
+16832:    if (req.method === "POST" && path === "/runtime/defense/state") {
+
+INCIDENTS:
+893:      path === "/runtime/incidents"
+1796:      path === "/runtime/incidents/metrics"
+1870:      path === "/runtime/incidents/search"
+1928:      path === "/runtime/incidents/completeness"
+2016:      path === "/runtime/incidents/dashboard"
+2100:      path === "/runtime/incidents"
+
+DASHBOARD/TENANT/ADMIN:
+11574:    if (req.method === "POST" && path === "/runtime/tenants") {
+12645:    if (req.method === "GET" && path === "/runtime/admin/dashboard") {
+12760:    if (req.method === "POST" && path === "/runtime/admin/tenants") {
+13137:    if (req.method === "GET" && path === "/runtime/admin/tenants") {
+13219:    if (req.method === "GET" && path === "/runtime/dashboard/tenants") {
+13323:    if (req.method === "GET" && path === "/runtime/tenants") {
+13636:    if (req.method === "GET" && path === "/runtime/dashboard") {
+
+RSOS-060A BOUNDARY BEWERTUNG 2026-06-15T05:14:01+00:00
+ERGEBNIS:
+- RSOS-060 Knowledge/Evidence Endpunkte liegen zusammenhaengend ca. Zeile 2437-5050.
+- RSOS-060 Phase 3 Endpunkte liegen ca. Zeile 2905-3027.
+- Defense/Recovery liegt getrennt ca. Zeile 14841-16832.
+- Incidents liegen ca. Zeile 893-2100.
+- Dashboard/Tenant/Admin liegt ca. Zeile 11574-13636.
+
+BEWERTUNG:
+- server.js enthaelt mehrere fachliche Bloecke.
+- RSOS-060 ist fachlich abgrenzbar, aber Git-Diff ist wegen bestehender Mischhistorie nicht sauber commitbar.
+- Sicherer Weg: server.js vorerst nicht committen; Boundary Audit committed dokumentieren.
+
+EMPFEHLUNG:
+- Naechster technischer Schritt: server.js modularisieren oder gezielt aus Backup/HEAD neu aufbauen.
+- Naechster fachlicher Schritt: RSOS-061 Verification Engine als Migration starten, ohne server.js weiter zu vergroessern.
