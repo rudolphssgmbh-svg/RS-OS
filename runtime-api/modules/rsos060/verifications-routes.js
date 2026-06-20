@@ -495,6 +495,21 @@ async function handleRsos060VerificationsRoutes(ctx) {
         const knowledgeId = "knowledge-rsos061a-" + auto_result.result_id;
         const recommendationId = "rec-rsos061c-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
 
+        // RSOS-061H tenant rule lookup
+        const feedbackRuleLookup = await db.query(`
+          SELECT rule_id
+          FROM runtime_recommendation_rules
+          WHERE tenant_id = $1
+            AND rule_name = $2
+          ORDER BY created_at DESC
+          LIMIT 1
+        `, [
+          tenant_id,
+          "Competency Gap Requires Training"
+        ]);
+
+        const feedbackRuleId = feedbackRuleLookup.rows[0]?.rule_id || null;
+
         await db.query(`
           INSERT INTO runtime_recommendations (
             recommendation_id,
@@ -521,9 +536,27 @@ async function handleRsos060VerificationsRoutes(ctx) {
             verification_id,
             result_id: auto_result.result_id,
             lesson_id: lessonResult.rows[0].lesson_id,
-            knowledge_id: knowledgeId
+            knowledge_id: knowledgeId,
+            rule_id: feedbackRuleId
           }),
           actor
+        ]);
+
+        await db.query(`
+          UPDATE runtime_recommendation_rules
+          SET
+            success_count = success_count + 1,
+            feedback_count = feedback_count + 1,
+            confidence_score = LEAST(100, confidence_score + 5),
+            last_feedback_at = now(),
+            updated_by = $2,
+            updated_at = now()
+          WHERE rule_id = $1
+            AND tenant_id = $3
+        `, [
+          feedbackRuleId,
+          actor,
+          tenant_id
         ]);
 
         auto_result.recommendation_id = recommendationId;
