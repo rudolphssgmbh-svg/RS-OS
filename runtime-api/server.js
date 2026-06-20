@@ -9639,6 +9639,96 @@ if (req.method === "POST" && path === "/runtime/execute") {
         created_by
       ]);
 
+      const gateUpdateResult = await db.query(`
+        WITH unknown_summary AS (
+          SELECT COUNT(*)::integer AS unknown_count
+          FROM runtime_unknowns
+          WHERE tenant_id = $1
+            AND related_object_id = $2
+            AND COALESCE(status, 'open') <> 'closed'
+        ),
+        risk_summary AS (
+          SELECT
+            COUNT(*)::integer AS risk_count,
+            COALESCE(MAX(risk_score), 0)::integer AS max_risk_score,
+            COALESCE(MAX(probability), 0)::integer AS max_probability,
+            COALESCE(MAX(damage), 0)::integer AS max_damage,
+            COUNT(*) FILTER (WHERE risk_state = 'acute')::integer AS acute_risk_count
+          FROM runtime_risks
+          WHERE tenant_id = $1
+            AND object_id = $2
+        ),
+        governance_summary AS (
+          SELECT
+            COUNT(*)::integer AS governance_decision_count,
+            COALESCE(
+              (
+                SELECT governance_status
+                FROM runtime_governance_decisions
+                WHERE tenant_id = $1
+                  AND object_id = $2
+                ORDER BY created_at DESC
+                LIMIT 1
+              ),
+              'not_checked'
+            )::text AS latest_governance_status
+        )
+        UPDATE runtime_recommendation_verification_gates g
+        SET
+          unknown_count = u.unknown_count,
+          risk_count = r.risk_count,
+          unknown_result = CASE
+            WHEN u.unknown_count > 0 THEN 'open_unknowns'
+            ELSE 'clear'
+          END,
+          risk_result = CASE
+            WHEN r.acute_risk_count > 0 THEN 'acute_risk'
+            WHEN r.max_risk_score >= 25 THEN 'high_risk'
+            WHEN r.risk_count > 0 THEN 'risk_present'
+            ELSE 'clear'
+          END,
+          governance_result = CASE
+            WHEN gs.latest_governance_status = 'not_checked' THEN 'not_checked'
+            ELSE gs.latest_governance_status
+          END,
+          residual_risk = jsonb_build_object(
+            'risk_count', r.risk_count,
+            'max_risk_score', r.max_risk_score,
+            'max_probability', r.max_probability,
+            'max_damage', r.max_damage,
+            'acute_risk_count', r.acute_risk_count,
+            'governance_decision_count', gs.governance_decision_count,
+            'latest_governance_status', gs.latest_governance_status,
+            'updated_after_gate_insert', true,
+            'updated_at', now()
+          )
+        FROM unknown_summary u, risk_summary r, governance_summary gs
+        WHERE g.tenant_id = $1
+          AND g.gate_id = $3
+        RETURNING g.*
+      `, [
+        tenant_id,
+        recommendation.object_id,
+        gate_id
+      ]);
+
+      const finalGate = gateUpdateResult.rows[0] || insertResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: recommendation.object_id,
+        event_type: "runtime.recommendation.verification_gate.updated",
+        message: JSON.stringify({
+          gate_id,
+          recommendation_id,
+          unknown_count: finalGate.unknown_count,
+          risk_count: finalGate.risk_count,
+          unknown_result: finalGate.unknown_result,
+          risk_result: finalGate.risk_result,
+          governance_result: finalGate.governance_result
+        })
+      });
+
       await writeEvent({
         tenant_id,
         object_id: recommendation.object_id,
@@ -9655,7 +9745,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
       return send(res, 200, {
         verified: gate_status === "verified",
         gate_created: true,
-        gate: insertResult.rows[0]
+        gate: finalGate
       });
     }
 
