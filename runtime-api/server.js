@@ -9600,10 +9600,10 @@ if (req.method === "POST" && path === "/runtime/execute") {
         )
         VALUES (
           $1,$2,$3,$4,$5,$6,$7,
-          $8,$9,$10,0,$11,$12,0,
-          $13,$14,$15,$16,$17,$18,$19,$20,
-          $21::jsonb,$22::jsonb,$23::jsonb,$24::jsonb,$25::jsonb,
-          $26::jsonb,$27,$28,now()
+          $8::integer,$9::integer,$10::integer,$11::integer,$12::integer,$13::integer,$14::integer,
+          $15::text,$16::text,$17::text,$18::text,$19::text,$20::text,$21::text,$22::text,
+          $23::jsonb,$24::jsonb,$25::jsonb,$26::jsonb,$27::jsonb,
+          $28::jsonb,$29::text,$30::text,now()
         )
         RETURNING *
       `, [
@@ -9614,11 +9614,13 @@ if (req.method === "POST" && path === "/runtime/execute") {
         gate_status,
         gate_result,
         gate_reason,
-        evidence_count,
-        source_count,
-        verification_count,
-        assumption_count,
-        hypothesis_count,
+        Number(evidence_count),
+        Number(source_count),
+        Number(verification_count),
+        0,
+        Number(assumption_count),
+        Number(hypothesis_count),
+        0,
         evidence_result,
         source_result,
         verification_result,
