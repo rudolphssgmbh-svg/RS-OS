@@ -9404,6 +9404,100 @@ if (req.method === "POST" && path === "/runtime/execute") {
     // VERIFY RUNTIME RECOMMENDATION GATE
     // RSOS-062E Recommendation Verification Gate
 
+    // GET LATEST RUNTIME RECOMMENDATION VERIFICATION GATE
+    // RSOS-062E-F Recommendation Gate Read API
+
+    if (req.method === "GET" && path.startsWith("/runtime/recommendations/gates/latest/")) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "governance",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const recommendation_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/gates/latest/", "")
+      );
+
+      if (!recommendation_id) {
+        return send(res, 400, {
+          error: "missing_recommendation_id"
+        });
+      }
+
+      const gateResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendation_verification_gates
+        WHERE tenant_id = $1::text
+          AND recommendation_id = $2::text
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [
+        tenant_id,
+        recommendation_id
+      ]);
+
+      return send(res, 200, {
+        recommendation_id,
+        latest_gate_found: gateResult.rows.length > 0,
+        latest_gate: gateResult.rows[0] || null
+      });
+    }
+
+    // GET RUNTIME RECOMMENDATION VERIFICATION GATE HISTORY
+    // RSOS-062E-F Recommendation Gate Read API
+
+    if (req.method === "GET" && path.startsWith("/runtime/recommendations/gates/history/")) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "governance",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const recommendation_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/gates/history/", "")
+      );
+
+      if (!recommendation_id) {
+        return send(res, 400, {
+          error: "missing_recommendation_id"
+        });
+      }
+
+      const gatesResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendation_verification_gates
+        WHERE tenant_id = $1::text
+          AND recommendation_id = $2::text
+        ORDER BY created_at DESC
+        LIMIT 50
+      `, [
+        tenant_id,
+        recommendation_id
+      ]);
+
+      return send(res, 200, {
+        recommendation_id,
+        count: gatesResult.rows.length,
+        gates: gatesResult.rows
+      });
+    }
+
     if (req.method === "POST" && path.startsWith("/runtime/recommendations/verify/")) {
 
       const auth = requireRole(req, [
