@@ -491,6 +491,43 @@ async function handleRsos060VerificationsRoutes(ctx) {
 
         auto_result.lesson_id = lessonResult.rows[0].lesson_id;
 
+        // RSOS-061C recommendation feedback
+        const knowledgeId = "knowledge-rsos061a-" + auto_result.result_id;
+        const recommendationId = "rec-rsos061c-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+        await db.query(`
+          INSERT INTO runtime_recommendations (
+            recommendation_id,
+            tenant_id,
+            object_id,
+            recommendation_type,
+            priority,
+            status,
+            reason,
+            evidence,
+            created_by
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
+        `, [
+          recommendationId,
+          tenant_id,
+          verification_id,
+          "LEARNING_FEEDBACK",
+          "normal",
+          "open",
+          "Verified learning should improve future recommendations.",
+          JSON.stringify({
+            source: "RSOS-061C",
+            verification_id,
+            result_id: auto_result.result_id,
+            lesson_id: lessonResult.rows[0].lesson_id,
+            knowledge_id: knowledgeId
+          }),
+          actor
+        ]);
+
+        auto_result.recommendation_id = recommendationId;
+
         await db.query(`
           UPDATE runtime_verification_cycles
           SET
