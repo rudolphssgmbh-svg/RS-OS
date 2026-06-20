@@ -9924,6 +9924,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "POST" && path.startsWith("/runtime/recommendations/execute/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "governance"
       ]);
@@ -9963,6 +9964,63 @@ if (req.method === "POST" && path === "/runtime/execute") {
       }
 
       const recommendation = recommendationResult.rows[0];
+
+      const latestGateResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendation_verification_gates
+        WHERE tenant_id = $1::text
+          AND recommendation_id = $2::text
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [
+        tenant_id,
+        recommendation_id
+      ]);
+
+      const latestGate = latestGateResult.rows[0] || null;
+
+      if (!latestGate) {
+        await writeEvent({
+          tenant_id,
+          object_id: recommendation.object_id,
+          event_type: "runtime.recommendation.execution.blocked_by_missing_gate",
+          message: JSON.stringify({
+            recommendation_id,
+            reason: "No verification gate found for recommendation."
+          })
+        });
+
+        return send(res, 409, {
+          error: "recommendation_execution_gate_missing",
+          recommendation_id,
+          message: "Recommendation execution blocked because no verification gate exists."
+        });
+      }
+
+      if (latestGate.gate_status !== "verified") {
+        await writeEvent({
+          tenant_id,
+          object_id: recommendation.object_id,
+          event_type: "runtime.recommendation.execution.blocked_by_gate",
+          message: JSON.stringify({
+            recommendation_id,
+            gate_id: latestGate.gate_id,
+            gate_status: latestGate.gate_status,
+            gate_result: latestGate.gate_result,
+            gate_reason: latestGate.gate_reason
+          })
+        });
+
+        return send(res, 409, {
+          error: "recommendation_execution_gate_not_verified",
+          recommendation_id,
+          gate_id: latestGate.gate_id,
+          gate_status: latestGate.gate_status,
+          gate_result: latestGate.gate_result,
+          gate_reason: latestGate.gate_reason,
+          message: "Recommendation execution blocked because latest verification gate is not verified."
+        });
+      }
 
       if (recommendation.status !== "approved") {
         return send(res, 409, {
