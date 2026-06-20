@@ -566,7 +566,12 @@ async function generateRecommendationsForObject({
       rule_id,
       rule_name,
       condition_definition,
-      recommendation_definition
+      recommendation_definition,
+      success_count,
+      failure_count,
+      feedback_count,
+      confidence_score,
+      last_feedback_at
     FROM runtime_recommendation_rules
     WHERE tenant_id = $1
       AND enabled = true
@@ -652,13 +657,28 @@ async function generateRecommendationsForObject({
   function calculateRecommendationConfidence(rule, definition, context) {
     const factors = [];
 
-    let confidenceScore = 70;
+    let confidenceScore = Number(rule.confidence_score || 70);
+    factors.push("learned_rule_confidence_score");
+
+    const successCount = Number(rule.success_count || 0);
+    const failureCount = Number(rule.failure_count || 0);
+    const feedbackCount = Number(rule.feedback_count || 0);
 
     if (definition.confidence_score !== undefined) {
-      confidenceScore = Number(definition.confidence_score);
+      confidenceScore = Math.round((confidenceScore * 0.7) + (Number(definition.confidence_score) * 0.3));
       factors.push("definition_confidence_score");
-    } else {
-      factors.push("default_confidence_score");
+    }
+
+    if (successCount > 0) {
+      factors.push("historical_rule_success");
+    }
+
+    if (failureCount > 0) {
+      factors.push("historical_rule_failure");
+    }
+
+    if (feedbackCount > 0) {
+      factors.push("historical_rule_feedback");
     }
 
     if (context.risk_score >= 70) {
@@ -690,7 +710,12 @@ async function generateRecommendationsForObject({
     return {
       confidence_score: confidenceScore,
       confidence_level: confidenceLevel,
-      confidence_factors: factors
+      confidence_factors: factors,
+      learned_rule_confidence_score: Number(rule.confidence_score || 70),
+      rule_success_count: successCount,
+      rule_failure_count: failureCount,
+      rule_feedback_count: feedbackCount,
+      rule_last_feedback_at: rule.last_feedback_at || null
     };
   }
 
@@ -719,6 +744,11 @@ async function generateRecommendationsForObject({
       confidence_score: confidence.confidence_score,
       confidence_level: confidence.confidence_level,
       confidence_factors: confidence.confidence_factors,
+      learned_rule_confidence_score: confidence.learned_rule_confidence_score,
+      rule_success_count: confidence.rule_success_count,
+      rule_failure_count: confidence.rule_failure_count,
+      rule_feedback_count: confidence.rule_feedback_count,
+      rule_last_feedback_at: confidence.rule_last_feedback_at,
       base_priority,
       effective_priority,
       effective_priority_score: effectivePriorityScore
