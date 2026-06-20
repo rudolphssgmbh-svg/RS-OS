@@ -9036,6 +9036,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
     // GENERATE RUNTIME RECOMMENDATIONS BY OBJECT
+    // RSOS-062A consolidated recommendation generator
 
     if (req.method === "POST" && path.startsWith("/runtime/recommendations/generate/")) {
 
@@ -9062,275 +9063,21 @@ if (req.method === "POST" && path === "/runtime/execute") {
         });
       }
 
-      const objectResult = await db.query(`
-        SELECT object_id, runtime_type, state, priority, risk_score
-        FROM runtime_objects
-        WHERE tenant_id = $1
-          AND object_id = $2
-        LIMIT 1
-      `, [tenant_id, object_id]);
+      const result = await generateRecommendationsForObject({
+        tenant_id,
+        object_id,
+        requested_by: auth.user.operator_id || auth.user.username || "runtime_admin"
+      });
 
-      if (objectResult.rows.length === 0) {
+      if (!result.found) {
         return send(res, 404, {
           error: "object_not_found",
           object_id
         });
       }
 
-      const object = objectResult.rows[0];
-
-      const actionsResult = await db.query(`
-        SELECT *
-        FROM runtime_actions
-        WHERE tenant_id = $1
-          AND object_id = $2
-          AND status NOT IN ('completed', 'cancelled', 'rejected')
-        ORDER BY created_at DESC
-      `, [tenant_id, object_id]);
-
-      const governanceResult = await db.query(`
-        SELECT *
-        FROM runtime_governance_decisions
-        WHERE tenant_id = $1
-          AND object_id = $2
-        ORDER BY created_at DESC
-        LIMIT 1
-      `, [tenant_id, object_id]);
-
-      const latestGovernance = governanceResult.rows[0] || null;
-
-      let latestApproval = null;
-
-      if (latestGovernance) {
-        const approvalResult = await db.query(`
-          SELECT *
-          FROM runtime_governance_approvals
-          WHERE tenant_id = $1
-            AND decision_id = $2
-          ORDER BY created_at DESC
-          LIMIT 1
-        `, [tenant_id, latestGovernance.decision_id]);
-
-        latestApproval = approvalResult.rows[0] || null;
-      }
-
-      const rulesResult = await db.query(`
-        SELECT
-          rule_id,
-          rule_name,
-          condition_definition,
-          recommendation_definition
-        FROM runtime_recommendation_rules
-        WHERE tenant_id = $1
-          AND enabled = true
-        ORDER BY rule_id ASC
-      `, [
-        tenant_id
-      ]);
-
-      const recommendations = [];
-
-      const riskScore = Number(object.risk_score || 0);
-
-      const highOpenActions = actionsResult.rows.filter(action =>
-        action.priority === "high" || action.priority === "critical"
-      );
-
-      const governanceReviewWithoutApproval =
-        latestGovernance &&
-        latestGovernance.governance_status === "review_required" &&
-        !latestApproval
-          ? true
-          : false;
-
-      const competencyResult = await db.query(`
-        SELECT
-          COUNT(*)::int AS competency_count,
-          COALESCE(MAX(gap), 0)::int AS max_gap
-        FROM runtime_competencies
-        WHERE tenant_id = $1
-          AND person_id = $2
-      `, [
-        tenant_id,
-        object_id
-      ]);
-
-      const competencyGap =
-        competencyResult.rows.length > 0
-          ? Number(competencyResult.rows[0].max_gap || 0)
-          : 0;
-
-      const context = {
-        risk_score: riskScore,
-        open_high_actions: highOpenActions.length,
-        governance_review_without_approval: governanceReviewWithoutApproval,
-        competency_gap: competencyGap
-      };
-
-      function evaluateRecommendationRule(condition, context) {
-        const field = condition.field;
-        const operator = condition.operator;
-        const expected = condition.value;
-        const actual = context[field];
-
-        if (actual === undefined) {
-          return false;
-        }
-
-        if (operator === ">=") return Number(actual) >= Number(expected);
-        if (operator === ">") return Number(actual) > Number(expected);
-        if (operator === "<=") return Number(actual) <= Number(expected);
-        if (operator === "<") return Number(actual) < Number(expected);
-        if (operator === "=") return actual === expected;
-        if (operator === "!=") return actual !== expected;
-
-        return false;
-      }
-
-      for (const rule of rulesResult.rows) {
-        const condition = rule.condition_definition || {};
-        const definition = rule.recommendation_definition || {};
-
-        if (!evaluateRecommendationRule(condition, context)) {
-          continue;
-        }
-
-        const recommendation_type = definition.recommendation_type;
-        const priority = definition.priority || "normal";
-
-        let reason = `Rule matched: ${rule.rule_name}`;
-        let evidence = {
-          rule_id: rule.rule_id,
-          rule_name: rule.rule_name,
-          condition,
-          context
-        };
-
-        if (recommendation_type === "RECHECK_GOVERNANCE") {
-          reason = `Object risk score is ${riskScore}; governance should be reviewed.`;
-          evidence = {
-            ...evidence,
-            risk_score: riskScore,
-            runtime_type: object.runtime_type,
-            state: object.state
-          };
-        }
-
-        if (recommendation_type === "CLOSE_OPEN_ACTIONS") {
-          reason = `${highOpenActions.length} high priority open action(s) should be resolved.`;
-          evidence = {
-            ...evidence,
-            open_action_count: actionsResult.rows.length,
-            high_open_action_count: highOpenActions.length
-          };
-        }
-
-        if (recommendation_type === "REQUEST_APPROVAL") {
-          reason = "Latest governance decision requires review and has no approval.";
-          evidence = {
-            ...evidence,
-            decision_id: latestGovernance ? latestGovernance.decision_id : null,
-            governance_status: latestGovernance ? latestGovernance.governance_status : null,
-            reason_codes: latestGovernance ? latestGovernance.reason_codes : null
-          };
-        }
-
-        if (recommendation_type === "TRAINING_REQUIRED") {
-          reason = `Competency gap detected; training or micro-learning should be planned.`;
-          evidence = {
-            ...evidence,
-            competency_gap: competencyGap,
-            person_id: object_id
-          };
-        }
-
-        recommendations.push({
-          recommendation_type,
-          priority,
-          reason,
-          evidence
-        });
-      }
-
-      const inserted = [];
-      const skipped_duplicates = [];
-
-      for (const recommendation of recommendations) {
-
-        const existingResult = await db.query(`
-          SELECT recommendation_id
-          FROM runtime_recommendations
-          WHERE tenant_id = $1
-            AND object_id = $2
-            AND recommendation_type = $3
-            AND status = 'open'
-          LIMIT 1
-        `, [
-          tenant_id,
-          object_id,
-          recommendation.recommendation_type
-        ]);
-
-        if (existingResult.rows.length > 0) {
-          skipped_duplicates.push({
-            recommendation_type: recommendation.recommendation_type,
-            existing_recommendation_id: existingResult.rows[0].recommendation_id
-          });
-          continue;
-        }
-
-        const recommendation_id =
-          "rec-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-
-        await db.query(`
-          INSERT INTO runtime_recommendations (
-            recommendation_id,
-            tenant_id,
-            object_id,
-            recommendation_type,
-            priority,
-            status,
-            reason,
-            evidence,
-            created_by
-          )
-          VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8)
-        `, [
-          recommendation_id,
-          tenant_id,
-          object_id,
-          recommendation.recommendation_type,
-          recommendation.priority,
-          recommendation.reason,
-          JSON.stringify(recommendation.evidence || {}),
-          auth.user.operator_id || auth.user.username || "runtime_admin"
-        ]);
-
-        inserted.push({
-          recommendation_id,
-          object_id,
-          status: "open",
-          ...recommendation
-        });
-      }
-
-      await writeEvent({
-        tenant_id,
-        object_id,
-        event_type: "runtime.recommendations.generated",
-        message: `Generated ${inserted.length} runtime recommendation(s)`
-      });
-
-      return send(res, 200, {
-        object_id,
-        tenant_id,
-        generated_count: inserted.length,
-        skipped_duplicate_count: skipped_duplicates.length,
-        recommendations: inserted,
-        skipped_duplicates
-      });
+      return send(res, 200, result);
     }
-
 
 
 
