@@ -422,6 +422,75 @@ async function handleRsos060VerificationsRoutes(ctx) {
 
         auto_result = autoResult.rows[0];
 
+        // RSOS-061A auto lesson and knowledge
+        const lessonResult = await db.query(`
+          INSERT INTO runtime_lessons_learned (
+            lesson_id,
+            tenant_id,
+            trust_level,
+            outcome_correct,
+            lesson_type,
+            lesson_summary,
+            recommended_action,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7
+          )
+          RETURNING *
+        `, [
+          tenant_id,
+          "verified",
+          true,
+          "verification_result",
+          "Verification cycle " + verification_id + " was verified by passed check.",
+          "Use this verified result as evidence for future recommendations.",
+          actor
+        ]);
+
+        await db.query(`
+          INSERT INTO runtime_knowledge (
+            knowledge_id,
+            tenant_id,
+            object_id,
+            knowledge_type,
+            title,
+            content,
+            source,
+            created_by,
+            updated_by
+          )
+          VALUES (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $8
+          )
+        `, [
+          "knowledge-rsos061a-" + auto_result.result_id,
+          tenant_id,
+          verification_id,
+          "verification_learning",
+          "Verified learning from cycle " + verification_id,
+          "A passed verification check confirmed cycle " + verification_id + ". Confidence was raised to 90.",
+          "runtime_verification_results:" + auto_result.result_id,
+          actor
+        ]);
+
+        auto_result.lesson_id = lessonResult.rows[0].lesson_id;
+
         await db.query(`
           UPDATE runtime_verification_cycles
           SET
