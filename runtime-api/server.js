@@ -9401,6 +9401,262 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
     }
 
+    // VERIFY RUNTIME RECOMMENDATION GATE
+    // RSOS-062E Recommendation Verification Gate
+
+    if (req.method === "POST" && path.startsWith("/runtime/recommendations/verify/")) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "governance",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const recommendation_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/verify/", "")
+      );
+
+      if (!recommendation_id) {
+        return send(res, 400, {
+          error: "missing_recommendation_id"
+        });
+      }
+
+      const recommendationResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND recommendation_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        recommendation_id
+      ]);
+
+      if (recommendationResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "recommendation_not_found",
+          recommendation_id
+        });
+      }
+
+      const recommendation = recommendationResult.rows[0];
+
+      const evidenceResult = await db.query(`
+        SELECT evidence_id, source_id
+        FROM runtime_evidence
+        WHERE tenant_id = $1
+          AND object_id = $2
+      `, [
+        tenant_id,
+        recommendation.object_id
+      ]);
+
+      const assumptionResult = await db.query(`
+        SELECT assumption_id
+        FROM runtime_assumptions
+        WHERE tenant_id = $1
+          AND evidence_id = ANY($2::uuid[])
+      `, [
+        tenant_id,
+        evidenceResult.rows.map(row => row.evidence_id)
+      ]);
+
+      const hypothesisResult = await db.query(`
+        SELECT hypothesis_id
+        FROM runtime_hypotheses
+        WHERE tenant_id = $1
+          AND assumption_id = ANY($2::uuid[])
+      `, [
+        tenant_id,
+        assumptionResult.rows.map(row => row.assumption_id)
+      ]);
+
+      const verificationResult = await db.query(`
+        SELECT verification_id
+        FROM runtime_verifications
+        WHERE tenant_id = $1
+          AND hypothesis_id = ANY($2::uuid[])
+      `, [
+        tenant_id,
+        hypothesisResult.rows.map(row => row.hypothesis_id)
+      ]);
+
+      const evidence_ids = evidenceResult.rows.map(row => row.evidence_id);
+      const source_ids = [...new Set(evidenceResult.rows.map(row => row.source_id).filter(Boolean))];
+      const assumption_ids = assumptionResult.rows.map(row => row.assumption_id);
+      const hypothesis_ids = hypothesisResult.rows.map(row => row.hypothesis_id);
+      const verification_ids = verificationResult.rows.map(row => row.verification_id);
+
+      const evidence_count = evidence_ids.length;
+      const source_count = source_ids.length;
+      const assumption_count = assumption_ids.length;
+      const hypothesis_count = hypothesis_ids.length;
+      const verification_count = verification_ids.length;
+
+      let gate_status = "pending";
+      let gate_result = "pending";
+      let gate_reason = "Recommendation verification gate created.";
+
+      let evidence_result = "available";
+      let source_result = "available";
+      let verification_result = "available";
+      let assumption_result = "documented";
+      let hypothesis_result = "available";
+      let unknown_result = "not_checked";
+      let risk_result = "not_checked";
+      let governance_result = "not_checked";
+
+      if (evidence_count === 0) {
+        gate_status = "needs_evidence";
+        gate_result = "needs_evidence";
+        gate_reason = "No runtime evidence found for recommendation object.";
+        evidence_result = "missing";
+        source_result = "not_checked";
+        verification_result = "not_checked";
+        assumption_result = "not_checked";
+        hypothesis_result = "not_checked";
+        unknown_result = "not_checked";
+        risk_result = "not_checked";
+        governance_result = "not_checked";
+      } else if (source_count === 0) {
+        gate_status = "needs_source_validation";
+        gate_result = "needs_source_validation";
+        gate_reason = "Runtime evidence exists but no linked source was found.";
+        source_result = "missing";
+      } else if (hypothesis_count === 0) {
+        gate_status = "needs_verification";
+        gate_result = "needs_verification";
+        gate_reason = "Evidence exists but no hypothesis chain was found.";
+        hypothesis_result = "missing";
+      } else if (verification_count === 0) {
+        gate_status = "needs_verification";
+        gate_result = "needs_verification";
+        gate_reason = "Hypothesis chain exists but no verification was found.";
+        verification_result = "missing";
+      } else {
+        gate_status = "verified_with_risk";
+        gate_result = "verified_with_risk";
+        gate_reason = "Evidence, source, hypothesis and verification chain found. Residual risk and governance still require explicit review.";
+        risk_result = "requires_review";
+        governance_result = "requires_review";
+      }
+
+      const gate_id =
+        "gate-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const gatePayload = {
+        recommendation_id,
+        recommendation_type: recommendation.recommendation_type,
+        recommendation_status: recommendation.status,
+        recommendation_priority: recommendation.priority,
+        object_id: recommendation.object_id,
+        checked_at: new Date().toISOString()
+      };
+
+      const insertResult = await db.query(`
+        INSERT INTO runtime_recommendation_verification_gates (
+          gate_id,
+          tenant_id,
+          recommendation_id,
+          object_id,
+          gate_status,
+          gate_result,
+          gate_reason,
+          evidence_count,
+          source_count,
+          verification_count,
+          unknown_count,
+          assumption_count,
+          hypothesis_count,
+          risk_count,
+          evidence_result,
+          source_result,
+          verification_result,
+          unknown_result,
+          assumption_result,
+          hypothesis_result,
+          risk_result,
+          governance_result,
+          evidence_ids,
+          source_ids,
+          verification_ids,
+          assumption_ids,
+          hypothesis_ids,
+          gate_payload,
+          created_by,
+          decided_by,
+          decided_at
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,
+          $8,$9,$10,0,$11,$12,0,
+          $13,$14,$15,$16,$17,$18,$19,$20,
+          $21::jsonb,$22::jsonb,$23::jsonb,$24::jsonb,$25::jsonb,
+          $26::jsonb,$27,$28,now()
+        )
+        RETURNING *
+      `, [
+        gate_id,
+        tenant_id,
+        recommendation_id,
+        recommendation.object_id,
+        gate_status,
+        gate_result,
+        gate_reason,
+        evidence_count,
+        source_count,
+        verification_count,
+        assumption_count,
+        hypothesis_count,
+        evidence_result,
+        source_result,
+        verification_result,
+        unknown_result,
+        assumption_result,
+        hypothesis_result,
+        risk_result,
+        governance_result,
+        JSON.stringify(evidence_ids),
+        JSON.stringify(source_ids),
+        JSON.stringify(verification_ids),
+        JSON.stringify(assumption_ids),
+        JSON.stringify(hypothesis_ids),
+        JSON.stringify(gatePayload),
+        created_by,
+        created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: recommendation.object_id,
+        event_type: "runtime.recommendation.verification_gate.created",
+        message: JSON.stringify({
+          gate_id,
+          recommendation_id,
+          gate_status,
+          gate_result,
+          gate_reason
+        })
+      });
+
+      return send(res, 200, {
+        verified: gate_status === "verified",
+        gate_created: true,
+        gate: insertResult.rows[0]
+      });
+    }
+
     // EXECUTE APPROVED RUNTIME RECOMMENDATION
 
     if (req.method === "POST" && path.startsWith("/runtime/recommendations/execute/")) {
