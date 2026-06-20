@@ -2,7 +2,12 @@ const crypto = require("crypto");
 const fs = require("fs");
 //require('dotenv').config();
 const http = require("http");
-const { Client } = require("pg");
+const { handleRsos060SourcesRoutes } = require("./modules/rsos060/sources-routes");
+const { handleRsos060EvidenceRoutes } = require("./modules/rsos060/evidence-routes");
+const { handleRsos060WitnessObservationsRoutes } = require("./modules/rsos060/witness-observations-routes");
+const { handleRsos060AssumptionsHypothesesRoutes } = require("./modules/rsos060/assumptions-hypotheses-routes");
+const { handleRsos060VerificationsRoutes } = require("./modules/rsos060/verifications-routes");
+const { Pool } = require("pg");
 const jwt = require("jsonwebtoken");
 
 //const ROOT_PUBLIC_KEY = fs.readFileSync(
@@ -13,7 +18,7 @@ const ROOT_PUBLIC_KEY = "DEV_MODE";
 
 const JWT_SECRET = process.env.JWT_SECRET || "RSOS_SECURE_RUNTIME_2026";
 
-const db = new Client({
+const db = new Pool({
   host: process.env.DB_HOST || "rsos-postgres",
   port: 5432,
   user: process.env.DB_USER || "rsos",
@@ -21,9 +26,236 @@ const db = new Client({
   database: process.env.DB_NAME || "rsos_runtime"
 });
 
-async function initDb() {
-  await db.connect();
 
+async function executeDefensePipeline(ingress_id) {
+  const ingressResult = await db.query(`
+    SELECT *
+    FROM runtime_ingress_events
+    WHERE ingress_id = $1
+    LIMIT 1
+  `, [ingress_id]);
+
+  if (ingressResult.rows.length === 0) {
+    return null;
+  }
+
+  const ingress = ingressResult.rows[0];
+  const tenant_id = ingress.tenant_id;
+  const risk_score = Number(ingress.risk_score || 10);
+  const confidence_score = Number(ingress.confidence_score || 70);
+
+  const pattern_result = { engine: "runtime_pattern_engine", status: "observed" };
+  const heuristic_result = { engine: "runtime_heuristic_engine", status: "observed" };
+  const cross_loop_result = { engine: "runtime_cross_loop_validation", status: "observed" };
+  const governance_result = { engine: "runtime_governance_policy_engine", status: "observed" };
+
+  let defense_decision = "allow";
+  let defense_status = "allowed";
+  let validation_status = "passed";
+  let validation_decision = "approved_for_apply";
+
+  if (risk_score >= 70 || confidence_score < 40) {
+    defense_decision = "quarantine";
+    defense_status = "quarantined";
+    validation_status = "requires_quarantine";
+    validation_decision = "requires_human_review";
+  } else if (risk_score >= 30 || confidence_score < 70) {
+    defense_decision = "shadow_validate";
+    defense_status = "shadow_pending";
+    validation_status = "passed_with_warnings";
+    validation_decision = "requires_human_review";
+  }
+
+  await db.query(`
+    UPDATE runtime_ingress_events
+    SET defense_status = $2,
+        defense_decision = $3,
+        pattern_result = $4,
+        heuristic_result = $5,
+        governance_result = $6,
+        cross_loop_result = $7
+    WHERE ingress_id = $1
+  `, [
+    ingress_id,
+    defense_status,
+    defense_decision,
+    JSON.stringify(pattern_result),
+    JSON.stringify(heuristic_result),
+    JSON.stringify(governance_result),
+    JSON.stringify(cross_loop_result)
+  ]);
+
+  const shadowResult = await db.query(`
+    INSERT INTO runtime_shadow_validations (
+      tenant_id,
+      ingress_id,
+      object_id,
+      object_type,
+      proposed_action,
+      current_state,
+      proposed_state,
+      validation_scope,
+      validation_engine,
+      pattern_result,
+      heuristic_result,
+      governance_result,
+      cross_loop_result,
+      timeline_result,
+      validation_status,
+      validation_decision,
+      risk_score,
+      confidence_score,
+      findings,
+      required_actions,
+      completed_at
+    )
+    VALUES (
+      $1,$2,$3,$4,$5,$6,$7,
+      'runtime_write',
+      'rsos-defense-autonomous-v1',
+      $8,$9,$10,$11,$12,
+      $13,$14,$15,$16,$17,$18,now()
+    )
+    RETURNING *
+  `, [
+    tenant_id,
+    ingress_id,
+    ingress.target_object_id,
+    ingress.target_object_type,
+    ingress.target_action,
+    JSON.stringify({}),
+    JSON.stringify(ingress.payload || {}),
+    JSON.stringify(pattern_result),
+    JSON.stringify(heuristic_result),
+    JSON.stringify(governance_result),
+    JSON.stringify(cross_loop_result),
+    JSON.stringify({ engine: "runtime_timeline", status: "observed" }),
+    validation_status,
+    validation_decision,
+    risk_score,
+    confidence_score,
+    JSON.stringify(["Autonomous defense pipeline phase 1 executed"]),
+    JSON.stringify(validation_decision === "requires_human_review" ? ["human_review"] : [])
+  ]);
+
+  let quarantine = null;
+
+  if (defense_decision === "quarantine") {
+    const quarantineResult = await db.query(`
+      INSERT INTO runtime_quarantine_queue (
+        tenant_id,
+        ingress_id,
+        quarantine_reason,
+        severity,
+        category,
+        object_id,
+        object_type,
+        proposed_action,
+        proposed_payload,
+        detected_by,
+        detection_details,
+        required_approval_level
+      )
+      VALUES (
+        $1,$2,'autonomous_defense_quarantine','high','runtime_defense',
+        $3,$4,$5,$6,'rsos-defense-autonomous-v1',$7,'runtime_admin'
+      )
+      RETURNING *
+    `, [
+      tenant_id,
+      ingress_id,
+      ingress.target_object_id,
+      ingress.target_object_type,
+      ingress.target_action,
+      JSON.stringify(ingress.payload || {}),
+      JSON.stringify({ risk_score, confidence_score, defense_decision })
+    ]);
+
+    quarantine = quarantineResult.rows[0];
+
+    await writeEvent({
+      event_type: "runtime.defense.quarantine.created",
+      object_id: ingress.target_object_id,
+      message: `Autonomous quarantine created: ${quarantine.quarantine_id}`,
+      tenant_id
+    });
+  }
+
+  await db.query(`
+    INSERT INTO runtime_defense_state (
+      tenant_id,
+      scope_type,
+      scope_id,
+      defense_mode,
+      defense_level,
+      last_ingress_id,
+      last_quarantine_id,
+      last_shadow_validation_id,
+      open_quarantine_count,
+      failed_validation_count,
+      recent_rejection_count,
+      current_risk_score,
+      current_confidence_score,
+      active_policy_flags,
+      active_risk_flags,
+      state_reason,
+      updated_by
+    )
+    VALUES (
+      $1,'tenant',$1,$2,$3,$4,$5,$6,
+      (SELECT COUNT(*) FROM runtime_quarantine_queue WHERE tenant_id = $1 AND status = 'open'),
+      (SELECT COUNT(*) FROM runtime_shadow_validations WHERE tenant_id = $1 AND validation_status IN ('failed','requires_quarantine')),
+      (SELECT COUNT(*) FROM runtime_ingress_events WHERE tenant_id = $1 AND defense_decision IN ('reject','quarantine') AND created_at > now() - interval '24 hours'),
+      $7,$8,$9,$10,$11,'rsos-defense-autonomous-v1'
+    )
+    ON CONFLICT (tenant_id, scope_type, scope_id)
+    DO UPDATE SET
+      defense_mode = EXCLUDED.defense_mode,
+      defense_level = EXCLUDED.defense_level,
+      last_ingress_id = EXCLUDED.last_ingress_id,
+      last_quarantine_id = EXCLUDED.last_quarantine_id,
+      last_shadow_validation_id = EXCLUDED.last_shadow_validation_id,
+      open_quarantine_count = EXCLUDED.open_quarantine_count,
+      failed_validation_count = EXCLUDED.failed_validation_count,
+      recent_rejection_count = EXCLUDED.recent_rejection_count,
+      current_risk_score = EXCLUDED.current_risk_score,
+      current_confidence_score = EXCLUDED.current_confidence_score,
+      active_policy_flags = EXCLUDED.active_policy_flags,
+      active_risk_flags = EXCLUDED.active_risk_flags,
+      state_reason = EXCLUDED.state_reason,
+      updated_by = EXCLUDED.updated_by,
+      updated_at = now()
+  `, [
+    tenant_id,
+    defense_decision === "quarantine" ? "quarantine_first" : "normal",
+    defense_decision === "quarantine" ? "elevated" : "standard",
+    ingress_id,
+    quarantine ? quarantine.quarantine_id : null,
+    shadowResult.rows[0].shadow_validation_id,
+    risk_score,
+    confidence_score,
+    JSON.stringify([]),
+    JSON.stringify(defense_decision === "quarantine" ? ["high_risk_ingress"] : []),
+    `Autonomous defense decision: ${defense_decision}`
+  ]);
+
+  await writeEvent({
+    event_type: "runtime.defense.pipeline.completed",
+    object_id: ingress.target_object_id,
+    message: `Autonomous defense pipeline completed: ${defense_decision}`,
+    tenant_id
+  });
+
+  return {
+    ingress_id,
+    defense_decision,
+    defense_status,
+    shadow_validation: shadowResult.rows[0],
+    quarantine
+  };
+}
+
+async function initDb() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS runtime_objects (
       object_id TEXT PRIMARY KEY,
@@ -194,6 +426,8 @@ function verifyToken(req) {
 
   try {
     return jwt.verify(token, JWT_SECRET);
+
+
   } catch (err) {
     return null;
   }
@@ -214,13 +448,24 @@ function requireRole(req, allowedRoles) {
     };
   }
 
-  if (!allowedRoles.includes(authUser.role)) {
+  const effectiveRoles = [
+    authUser.role,
+    authUser.system_role
+  ].filter(Boolean);
+
+  const hasAllowedRole = effectiveRoles.some(role =>
+    allowedRoles.includes(role)
+  );
+
+  if (!hasAllowedRole) {
     return {
       allowed: false,
       code: 403,
       response: {
         error: "forbidden",
-        message: "insufficient_role"
+        message: "insufficient_role",
+        required_roles: allowedRoles,
+        effective_roles: effectiveRoles
       }
     };
   }
@@ -648,7 +893,1573 @@ const server = http.createServer(async (req, res) => {
     // CREATE OBJECT
 
 
-    if (req.method === "POST" && path === "/runtime/evidence") {
+    // RSOS-071 CREATE INCIDENT
+
+    if (
+      req.method === "POST" &&
+      path === "/runtime/incidents"
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+
+      const result = await db.query(`
+        INSERT INTO runtime_incidents (
+          tenant_id,
+          title,
+          description,
+          incident_type,
+          severity,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING *
+      `, [
+        auth.user.tenant_id,
+        body.title,
+        body.description || null,
+        body.incident_type || "generic",
+        body.severity || "medium",
+        auth.user.operator_id
+      ]);
+
+      return send(res, 201, result.rows[0]);
+    }
+
+
+    // RSOS-071 LINK INCIDENT
+
+    if (
+      req.method === "POST" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/links$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+      const body = await readBody(req);
+
+      const result = await db.query(`
+        INSERT INTO runtime_incident_links (
+          tenant_id,
+          incident_id,
+          linked_type,
+          linked_id,
+          relation_type,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING *
+      `, [
+        auth.user.tenant_id,
+        incident_id,
+        body.linked_type,
+        body.linked_id,
+        body.relation_type || "related",
+        auth.user.operator_id
+      ]);
+
+      return send(res, 201, result.rows[0]);
+    }
+
+
+
+    // RSOS-071E UPDATE INCIDENT STATUS
+
+    if (
+      req.method === "PATCH" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/status$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+      const body = await readBody(req);
+
+      const allowedStatuses = [
+        "open",
+        "triage",
+        "contained",
+        "recovery_requested",
+        "recovery_in_progress",
+        "verification_pending",
+        "verified",
+        "closed",
+        "cancelled",
+        "rejected"
+      ];
+
+      if (!body.status || !allowedStatuses.includes(body.status)) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "invalid incident status",
+          allowed_statuses: allowedStatuses
+        });
+      }
+
+      const existing = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      if (existing.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "incident not found"
+        });
+      }
+
+      const oldStatus = existing.rows[0].status;
+
+      if (body.status === "closed") {
+
+        const governanceCheck = await db.query(`
+          SELECT
+            EXISTS (
+              SELECT 1
+              FROM runtime_governance_decisions
+              WHERE tenant_id = $1
+                AND object_id = $2
+            ) AS has_decision,
+
+            EXISTS (
+              SELECT 1
+              FROM runtime_governance_approvals
+              WHERE tenant_id = $1
+                AND object_id = $2
+            ) AS has_approval,
+
+            EXISTS (
+              SELECT 1
+              FROM runtime_risks
+              WHERE tenant_id = $1
+                AND object_id = $2
+            ) AS has_residual_risk,
+
+            EXISTS (
+              SELECT 1
+              FROM runtime_incident_lessons
+              WHERE tenant_id = $1
+                AND incident_id = $2::uuid
+            ) AS has_lesson
+        `, [
+          auth.user.tenant_id,
+          incident_id
+        ]);
+
+        const checks = governanceCheck.rows[0];
+
+        const governanceReady =
+          checks.has_decision &&
+          checks.has_approval &&
+          checks.has_residual_risk &&
+          checks.has_lesson;
+
+        if (!governanceReady) {
+          return send(res, 409, {
+            error: "governance_incomplete",
+            message: "incident cannot be closed before governance requirements are complete",
+            governance_ready: false,
+            checks
+          });
+        }
+      }
+
+      const result = await db.query(`
+        UPDATE runtime_incidents
+        SET status = $1,
+            updated_by = $2,
+            updated_at = now(),
+            closed_at = CASE
+              WHEN $1 = 'closed' AND status <> 'closed' THEN now()
+              ELSE closed_at
+            END
+        WHERE tenant_id = $3
+          AND incident_id = $4
+        RETURNING *
+      `, [
+        body.status,
+        auth.user.operator_id,
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: incident_id,
+        event_type: "runtime.incident.status.changed",
+        message: JSON.stringify({
+          incident_id,
+          old_status: oldStatus,
+          new_status: body.status,
+          reason: body.reason || null,
+          changed_by: auth.user.operator_id
+        }),
+        created_by: auth.user.operator_id
+      });
+
+      return send(res, 200, {
+        incident: result.rows[0],
+        old_status: oldStatus,
+        new_status: body.status
+      });
+    }
+
+
+
+    // RSOS-071F GET INCIDENT TIMELINE
+
+    if (
+      req.method === "GET" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/timeline$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+
+      const incident = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      if (incident.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "incident not found"
+        });
+      }
+
+      const events = await db.query(`
+        SELECT *
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at ASC
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      return send(res, 200, {
+        incident: incident.rows[0],
+        event_count: events.rows.length,
+        events: events.rows
+      });
+    }
+
+
+
+    // RSOS-071G CREATE INCIDENT LESSON
+
+    if (
+      req.method === "POST" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/lessons$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+      const body = await readBody(req);
+
+      const result = await db.query(`
+        INSERT INTO runtime_incident_lessons (
+          tenant_id,
+          incident_id,
+          lesson_type,
+          lesson_summary,
+          root_cause,
+          prevention_action,
+          improvement_action,
+          responsible_user,
+          status,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        RETURNING *
+      `, [
+        auth.user.tenant_id,
+        incident_id,
+        body.lesson_type || "improvement",
+        body.lesson_summary,
+        body.root_cause || null,
+        body.prevention_action || null,
+        body.improvement_action || null,
+        body.responsible_user || null,
+        body.status || "open",
+        auth.user.operator_id
+      ]);
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: incident_id,
+        event_type: "runtime.incident.lesson.created",
+        message: JSON.stringify({
+          incident_id,
+          lesson_id: result.rows[0].lesson_id,
+          lesson_type: result.rows[0].lesson_type,
+          lesson_summary: result.rows[0].lesson_summary,
+          created_by: auth.user.operator_id
+        }),
+        created_by: auth.user.operator_id
+      });
+
+      return send(res, 201, result.rows[0]);
+    }
+
+
+    // RSOS-071G GET INCIDENT LESSONS
+
+    if (
+      req.method === "GET" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/lessons$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_incident_lessons
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        ORDER BY created_at ASC
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      return send(res, 200, {
+        incident_id,
+        lesson_count: result.rows.length,
+        lessons: result.rows
+      });
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // RSOS-073D INCIDENT GOVERNANCE COMPLETENESS
+
+    if (
+      req.method === "GET" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/governance\/completeness$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+
+      const incident = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      if (incident.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "incident not found"
+        });
+      }
+
+      const decisions = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const approvals = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_governance_approvals
+        WHERE tenant_id = $1
+          AND object_id = $2
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const risks = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_risks
+        WHERE tenant_id = $1
+          AND object_id = $2
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const checks = {
+        has_decision: decisions.rows[0].count > 0,
+        has_approval: approvals.rows[0].count > 0,
+        has_residual_risk: risks.rows[0].count > 0,
+        incident_closed: incident.rows[0].status === "closed"
+      };
+
+      const governanceReady =
+        checks.has_decision &&
+        checks.has_approval &&
+        checks.has_residual_risk &&
+        checks.incident_closed;
+
+      return send(res, 200, {
+        incident_id,
+        tenant_id: auth.user.tenant_id,
+        governance_ready: governanceReady,
+        checks,
+        counts: {
+          decisions: decisions.rows[0].count,
+          approvals: approvals.rows[0].count,
+          residual_risks: risks.rows[0].count
+        }
+      });
+    }
+
+
+    // RSOS-073C CREATE INCIDENT RESIDUAL RISK
+
+    if (
+      req.method === "POST" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/residual-risk$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+      const body = await readBody(req);
+
+      const incident = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      if (incident.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "incident not found"
+        });
+      }
+
+      const probability = Number(body.probability || 1);
+      const damage = Number(body.damage || 1);
+      const risk_score = probability * damage;
+
+      const risk_id =
+        "risk-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const result = await db.query(`
+        INSERT INTO runtime_risks (
+          risk_id,
+          object_id,
+          tenant_id,
+          title,
+          description,
+          risk_category,
+          risk_state,
+          probability,
+          damage,
+          risk_score,
+          created_at,
+          updated_at
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now())
+        RETURNING *
+      `, [
+        risk_id,
+        incident_id,
+        auth.user.tenant_id,
+        body.title || "Incident residual risk",
+        body.description || null,
+        body.risk_category || "incident",
+        body.risk_state || "concrete",
+        probability,
+        damage,
+        risk_score
+      ]);
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: incident_id,
+        event_type: "runtime.incident.residual_risk.created",
+        message: JSON.stringify({
+          incident_id,
+          risk_id,
+          probability,
+          damage,
+          risk_score,
+          created_by: auth.user.operator_id
+        }),
+        created_by: auth.user.operator_id
+      });
+
+      return send(res, 201, {
+        incident: incident.rows[0],
+        residual_risk: result.rows[0]
+      });
+    }
+
+
+    // RSOS-073B CREATE INCIDENT GOVERNANCE APPROVAL
+
+    if (
+      req.method === "POST" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/governance-approval$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+      const body = await readBody(req);
+
+      const incident = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      if (incident.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "incident not found"
+        });
+      }
+
+      const latestDecision = await db.query(`
+        SELECT *
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      if (latestDecision.rows.length === 0) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "governance decision required before approval"
+        });
+      }
+
+      const approval_id =
+        "appr-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const decision = latestDecision.rows[0];
+
+      const approvalStatus =
+        body.approval_status || body.status || "approved";
+
+      const reason =
+        body.reason || "Incident governance approval created";
+
+      const result = await db.query(`
+        INSERT INTO runtime_governance_approvals (
+          approval_id,
+          decision_id,
+          object_id,
+          tenant_id,
+          approval_status,
+          reason,
+          requested_by,
+          decided_by,
+          created_at
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
+        RETURNING *
+      `, [
+        approval_id,
+        decision.decision_id,
+        incident_id,
+        auth.user.tenant_id,
+        approvalStatus,
+        reason,
+        body.requested_by || incident.rows[0].created_by || auth.user.operator_id,
+        auth.user.operator_id
+      ]);
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: incident_id,
+        event_type: "runtime.incident.governance_approval.created",
+        message: JSON.stringify({
+          incident_id,
+          decision_id: decision.decision_id,
+          approval_id,
+          approval_status: approvalStatus,
+          reason,
+          decided_by: auth.user.operator_id
+        }),
+        created_by: auth.user.operator_id
+      });
+
+      return send(res, 201, {
+        incident: incident.rows[0],
+        governance_decision: decision,
+        governance_approval: result.rows[0]
+      });
+    }
+
+
+    // RSOS-073A CREATE INCIDENT GOVERNANCE REVIEW
+
+    if (
+      req.method === "POST" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/governance-review$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+      const body = await readBody(req);
+
+      const incident = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      if (incident.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "incident not found"
+        });
+      }
+
+      const decision_id =
+        "gov-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+      const governance_status =
+        body.status || "pending_review";
+
+      const reason_codes = {
+        decision_type: body.decision_type || "incident_governance_review",
+        reason: body.reason || "Incident governance review created",
+        created_by: auth.user.operator_id
+      };
+
+      const result = await db.query(`
+        INSERT INTO runtime_governance_decisions (
+          decision_id,
+          object_id,
+          tenant_id,
+          governance_status,
+          reason_codes,
+          risk_count,
+          max_risk_score,
+          acute_risk_count,
+          open_action_count,
+          high_open_action_count,
+          graph_edge_count,
+          audit_event_count,
+          created_at
+        )
+        VALUES ($1,$2,$3,$4,$5,0,0,0,0,0,0,0,now())
+        RETURNING *
+      `, [
+        decision_id,
+        incident_id,
+        auth.user.tenant_id,
+        governance_status,
+        JSON.stringify(reason_codes)
+      ]);
+
+      await writeEvent({
+        tenant_id: auth.user.tenant_id,
+        object_id: incident_id,
+        event_type: "runtime.incident.governance_review.created",
+        message: JSON.stringify({
+          incident_id,
+          decision_id,
+          governance_status,
+          reason_codes,
+          created_by: auth.user.operator_id
+        }),
+        created_by: auth.user.operator_id
+      });
+
+      return send(res, 201, {
+        incident: incident.rows[0],
+        governance_decision: result.rows[0]
+      });
+    }
+
+
+    // RSOS-072F INCIDENT GOVERNANCE VIEW
+
+    if (
+      req.method === "GET" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/governance$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+
+      const decisions = await db.query(`
+        SELECT *
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const approvals = await db.query(`
+        SELECT *
+        FROM runtime_governance_approvals
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const risks = await db.query(`
+        SELECT *
+        FROM runtime_risks
+        WHERE tenant_id = $1
+          AND object_id = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      return send(res, 200, {
+        incident_id,
+
+        governance_decisions:
+          decisions.rows.length,
+
+        governance_approvals:
+          approvals.rows.length,
+
+        latest_decision:
+          decisions.rows[0] || null,
+
+        latest_approval:
+          approvals.rows[0] || null,
+
+        residual_risk:
+          risks.rows[0] || null
+      });
+    }
+
+
+    // RSOS-072E INCIDENT METRICS
+
+    if (
+      req.method === "GET" &&
+      path === "/runtime/incidents/metrics"
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const closureResult = await db.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE closed_at IS NOT NULL)::int AS closed_count,
+          AVG(EXTRACT(EPOCH FROM (closed_at - created_at)) / 60)
+            FILTER (WHERE closed_at IS NOT NULL) AS avg_minutes_to_close
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const verificationResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS verified_recovery_count,
+          AVG(EXTRACT(EPOCH FROM (v.verified_at - i.created_at)) / 60)
+            AS avg_minutes_incident_to_verification,
+          AVG(EXTRACT(EPOCH FROM (v.verified_at - r.requested_at)) / 60)
+            AS avg_minutes_request_to_verification
+        FROM runtime_incidents i
+        JOIN runtime_incident_links l
+          ON l.tenant_id = i.tenant_id
+         AND l.incident_id = i.incident_id
+         AND l.linked_type = 'recovery_request'
+        JOIN runtime_recovery_requests r
+          ON r.tenant_id = l.tenant_id
+         AND r.recovery_request_id = l.linked_id
+        JOIN runtime_recovery_verifications v
+          ON v.tenant_id = r.tenant_id
+         AND v.recovery_request_id = r.recovery_request_id
+        WHERE i.tenant_id = $1
+          AND v.verification_status = 'verified'
+          AND v.verified_at IS NOT NULL
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const closure = closureResult.rows[0];
+      const verification = verificationResult.rows[0];
+
+      return send(res, 200, {
+        tenant_id: auth.user.tenant_id,
+        closed_count: closure.closed_count,
+        verified_recovery_count: verification.verified_recovery_count,
+        avg_minutes_to_close: closure.avg_minutes_to_close === null
+          ? null
+          : Number(Number(closure.avg_minutes_to_close).toFixed(3)),
+        avg_minutes_incident_to_verification: verification.avg_minutes_incident_to_verification === null
+          ? null
+          : Number(Number(verification.avg_minutes_incident_to_verification).toFixed(3)),
+        avg_minutes_request_to_verification: verification.avg_minutes_request_to_verification === null
+          ? null
+          : Number(Number(verification.avg_minutes_request_to_verification).toFixed(3))
+      });
+    }
+
+
+    // RSOS-072D INCIDENT SEARCH
+
+    if (
+      req.method === "GET" &&
+      path === "/runtime/incidents/search"
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const url = new URL(req.url, "http://localhost");
+      const q = url.searchParams.get("q");
+
+      if (!q) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "q query parameter required"
+        });
+      }
+
+      const result = await db.query(`
+        SELECT DISTINCT
+          i.*
+        FROM runtime_incidents i
+        LEFT JOIN runtime_incident_lessons l
+          ON l.tenant_id = i.tenant_id
+         AND l.incident_id = i.incident_id
+        WHERE i.tenant_id = $1
+          AND (
+            i.title ILIKE $2
+            OR i.description ILIKE $2
+            OR l.lesson_summary ILIKE $2
+            OR l.root_cause ILIKE $2
+            OR l.improvement_action ILIKE $2
+          )
+        ORDER BY i.created_at DESC
+      `, [
+        auth.user.tenant_id,
+        `%${q}%`
+      ]);
+
+      return send(res, 200, {
+        tenant_id: auth.user.tenant_id,
+        query: q,
+        result_count: result.rows.length,
+        incidents: result.rows
+      });
+    }
+
+
+    // RSOS-072C INCIDENT COMPLETENESS DASHBOARD
+
+    if (
+      req.method === "GET" &&
+      path === "/runtime/incidents/completeness"
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const result = await db.query(`
+        SELECT
+          i.incident_id,
+          i.status,
+
+          EXISTS (
+            SELECT 1
+            FROM runtime_incident_links l
+            WHERE l.tenant_id = i.tenant_id
+              AND l.incident_id = i.incident_id
+              AND l.linked_type = 'recovery_request'
+          ) AS has_recovery_link,
+
+          EXISTS (
+            SELECT 1
+            FROM runtime_incident_links l
+            JOIN runtime_recovery_verifications v
+              ON v.tenant_id = l.tenant_id
+             AND v.recovery_request_id = l.linked_id
+            WHERE l.tenant_id = i.tenant_id
+              AND l.incident_id = i.incident_id
+              AND l.linked_type = 'recovery_request'
+              AND v.verification_status = 'verified'
+          ) AS has_verified_result,
+
+          EXISTS (
+            SELECT 1
+            FROM runtime_incident_lessons lesson
+            WHERE lesson.tenant_id = i.tenant_id
+              AND lesson.incident_id = i.incident_id
+          ) AS has_lesson
+
+        FROM runtime_incidents i
+        WHERE i.tenant_id = $1
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const cases = result.rows;
+
+      const casesTotal = cases.length;
+
+      const fullyComplete = cases.filter(c =>
+        c.has_recovery_link &&
+        c.has_verified_result &&
+        c.has_lesson &&
+        c.status === "closed"
+      ).length;
+
+      const missingRecoveryLink = cases.filter(c => !c.has_recovery_link).length;
+      const missingVerification = cases.filter(c => !c.has_verified_result).length;
+      const missingLesson = cases.filter(c => !c.has_lesson).length;
+      const missingClosure = cases.filter(c => c.status !== "closed").length;
+
+      return send(res, 200, {
+        tenant_id: auth.user.tenant_id,
+        cases_total: casesTotal,
+        fully_complete: fullyComplete,
+        missing_recovery_link: missingRecoveryLink,
+        missing_verification: missingVerification,
+        missing_lesson: missingLesson,
+        missing_closure: missingClosure,
+        completeness_ratio: casesTotal === 0
+          ? 1
+          : Number((fullyComplete / casesTotal).toFixed(3)),
+        cases: cases
+      });
+    }
+
+
+    // RSOS-072B INCIDENT DASHBOARD SUMMARY
+
+    if (
+      req.method === "GET" &&
+      path === "/runtime/incidents/dashboard"
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const statusResult = await db.query(`
+        SELECT status, COUNT(*)::int AS count
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+        GROUP BY status
+        ORDER BY status
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const severityResult = await db.query(`
+        SELECT severity, COUNT(*)::int AS count
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+        GROUP BY severity
+        ORDER BY severity
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const typeResult = await db.query(`
+        SELECT incident_type, COUNT(*)::int AS count
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+        GROUP BY incident_type
+        ORDER BY incident_type
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const lessonResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_incident_lessons
+        WHERE tenant_id = $1
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const openCriticalResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND status <> 'closed'
+          AND severity = 'critical'
+      `, [
+        auth.user.tenant_id
+      ]);
+
+      const toMap = rows =>
+        rows.reduce((acc, row) => {
+          acc[row.status || row.severity || row.incident_type] = row.count;
+          return acc;
+        }, {});
+
+      return send(res, 200, {
+        tenant_id: auth.user.tenant_id,
+        total_incidents: statusResult.rows.reduce((sum, r) => sum + r.count, 0),
+        by_status: toMap(statusResult.rows),
+        by_severity: toMap(severityResult.rows),
+        by_type: toMap(typeResult.rows),
+        lessons_total: lessonResult.rows[0].count,
+        open_critical: openCriticalResult.rows[0].count
+      });
+    }
+
+
+    // RSOS-072A INCIDENT REGISTRY
+
+    if (
+      req.method === "GET" &&
+      path === "/runtime/incidents"
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const url = new URL(req.url, "http://localhost");
+
+      const status =
+        url.searchParams.get("status");
+
+      const severity =
+        url.searchParams.get("severity");
+
+      const incidentType =
+        url.searchParams.get("incident_type");
+
+      const limit =
+        parseInt(
+          url.searchParams.get("limit") || "100",
+          10
+        );
+
+      const conditions = [
+        "tenant_id = $1"
+      ];
+
+      const params = [
+        auth.user.tenant_id
+      ];
+
+      let idx = 2;
+
+      if (status) {
+        conditions.push(
+          `status = $${idx++}`
+        );
+        params.push(status);
+      }
+
+      if (severity) {
+        conditions.push(
+          `severity = $${idx++}`
+        );
+        params.push(severity);
+      }
+
+      if (incidentType) {
+        conditions.push(
+          `incident_type = $${idx++}`
+        );
+        params.push(incidentType);
+      }
+
+      params.push(limit);
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY created_at DESC
+        LIMIT $${idx}
+      `, params);
+
+      return send(res, 200, {
+        tenant_id: auth.user.tenant_id,
+        incident_count: result.rows.length,
+        incidents: result.rows
+      });
+    }
+
+
+    // RSOS-071H GET INCIDENT SUMMARY
+
+    if (
+      req.method === "GET" &&
+      path.match(/^\/runtime\/incidents\/[^/]+\/summary$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+
+      const incidentResult = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      if (incidentResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "incident not found"
+        });
+      }
+
+      const linksResult = await db.query(`
+        SELECT *
+        FROM runtime_incident_links
+        WHERE tenant_id = $1
+          AND incident_id = $2
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const recoveryRequestIds = linksResult.rows
+        .filter(l => l.linked_type === "recovery_request")
+        .map(l => l.linked_id);
+
+      let recoveryCount = 0;
+      let verificationCount = 0;
+      let verifiedCount = 0;
+
+      if (recoveryRequestIds.length > 0) {
+        const rr = await db.query(`
+          SELECT COUNT(*)::int AS count
+          FROM runtime_recovery_requests
+          WHERE tenant_id = $1
+            AND recovery_request_id = ANY($2::uuid[])
+        `, [
+          auth.user.tenant_id,
+          recoveryRequestIds
+        ]);
+
+        recoveryCount = rr.rows[0].count;
+
+        const rv = await db.query(`
+          SELECT
+            COUNT(*)::int AS count,
+            COUNT(*) FILTER (WHERE verification_status = 'verified')::int AS verified_count
+          FROM runtime_recovery_verifications
+          WHERE tenant_id = $1
+            AND recovery_request_id = ANY($2::uuid[])
+        `, [
+          auth.user.tenant_id,
+          recoveryRequestIds
+        ]);
+
+        verificationCount = rv.rows[0].count;
+        verifiedCount = rv.rows[0].verified_count;
+      }
+
+      const lessonsResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_incident_lessons
+        WHERE tenant_id = $1
+          AND incident_id = $2
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const auditResult = await db.query(`
+        SELECT COUNT(*)::int AS count
+        FROM runtime_events
+        WHERE tenant_id = $1
+          AND object_id = $2
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const incident = incidentResult.rows[0];
+
+      const completenessChecks = {
+        has_incident: true,
+        has_recovery_link: recoveryRequestIds.length > 0,
+        has_recovery_request: recoveryCount > 0,
+        has_verification: verificationCount > 0,
+        has_verified_result: verifiedCount > 0,
+        has_lesson: lessonsResult.rows[0].count > 0,
+        has_audit_timeline: auditResult.rows[0].count > 0,
+        is_closed: incident.status === "closed"
+      };
+
+      const passedChecks = Object.values(completenessChecks).filter(Boolean).length;
+      const totalChecks = Object.values(completenessChecks).length;
+
+      return send(res, 200, {
+        incident_id,
+        tenant_id: incident.tenant_id,
+        title: incident.title,
+        incident_type: incident.incident_type,
+        severity: incident.severity,
+        status: incident.status,
+        created_at: incident.created_at,
+        closed_at: incident.closed_at,
+        counts: {
+          links: linksResult.rows.length,
+          recovery_requests: recoveryCount,
+          recovery_verifications: verificationCount,
+          verified_recoveries: verifiedCount,
+          lessons: lessonsResult.rows[0].count,
+          audit_events: auditResult.rows[0].count
+        },
+        case_completeness: {
+          passed: passedChecks,
+          total: totalChecks,
+          ratio: Number((passedChecks / totalChecks).toFixed(3)),
+          checks: completenessChecks
+        }
+      });
+    }
+
+
+    // RSOS-071 GET INCIDENT CASE
+
+    if (
+      req.method === "GET" &&
+      path.match(/^\/runtime\/incidents\/[^/]+$/)
+    ) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor",
+        "governance"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const incident_id = path.split("/")[3];
+
+      const incident = await db.query(`
+        SELECT *
+        FROM runtime_incidents
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        LIMIT 1
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const links = await db.query(`
+        SELECT *
+        FROM runtime_incident_links
+        WHERE tenant_id = $1
+          AND incident_id = $2
+        ORDER BY created_at ASC
+      `, [
+        auth.user.tenant_id,
+        incident_id
+      ]);
+
+      const recoveryRequestIds = links.rows
+        .filter(l => l.linked_type === "recovery_request")
+        .map(l => l.linked_id);
+
+      let recoveryRequests = [];
+      let recoveryVerifications = [];
+      let restoredObjects = [];
+
+      if (recoveryRequestIds.length > 0) {
+        const rr = await db.query(`
+          SELECT *
+          FROM runtime_recovery_requests
+          WHERE tenant_id = $1
+            AND recovery_request_id = ANY($2::uuid[])
+          ORDER BY created_at ASC
+        `, [
+          auth.user.tenant_id,
+          recoveryRequestIds
+        ]);
+
+        recoveryRequests = rr.rows;
+
+        const rv = await db.query(`
+          SELECT *
+          FROM runtime_recovery_verifications
+          WHERE tenant_id = $1
+            AND recovery_request_id = ANY($2::uuid[])
+          ORDER BY created_at ASC
+        `, [
+          auth.user.tenant_id,
+          recoveryRequestIds
+        ]);
+
+        recoveryVerifications = rv.rows;
+
+        const restoredObjectIds = rv.rows
+          .map(v => v.verification_result && v.verification_result.runtime_object_id)
+          .filter(Boolean);
+
+        if (restoredObjectIds.length > 0) {
+          const ro = await db.query(`
+            SELECT *
+            FROM runtime_objects
+            WHERE tenant_id = $1
+              AND object_id = ANY($2::text[])
+            ORDER BY created_at ASC
+          `, [
+            auth.user.tenant_id,
+            restoredObjectIds
+          ]);
+
+          restoredObjects = ro.rows;
+        }
+      }
+
+      return send(res, 200, {
+        incident: incident.rows[0] || null,
+        links: links.rows,
+        recovery_requests: recoveryRequests,
+        recovery_verifications: recoveryVerifications,
+        restored_objects: restoredObjects
+      });
+    }
+
+
+
+
+
+    const rsos060EvidenceHandled = await handleRsos060EvidenceRoutes({
+      req,
+      res,
+      path,
+      db,
+      crypto,
+      verifyToken,
+      readBody,
+      writeEvent,
+      createAuditHash,
+      send
+    });
+
+    if (rsos060EvidenceHandled !== false) {
+      return rsos060EvidenceHandled;
+    }
+
+    if (req.method === "POST" && path === "/runtime/reports") {
       const authUser = verifyToken(req);
 
       if (!authUser) {
@@ -661,109 +2472,93 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
 
       const tenant_id = body.tenant_id || authUser.tenant_id;
-      const evidence_type = body.evidence_type;
-      const title = body.title || null;
-      const evidence_text = body.evidence_text || null;
       const source_id = body.source_id || null;
-      const object_id = body.object_id || null;
-      const event_id = body.event_id || null;
-      const confidence = body.confidence || null;
-      const observed_at = body.observed_at || null;
+      const evidence_id = body.evidence_id || null;
+      const report_type = body.report_type;
+      const title = body.title;
+      const report_text = body.report_text || null;
+      const received_at = body.received_at || null;
       const created_by = authUser.operator_id || authUser.role || "runtime_user";
 
-      if (!tenant_id) {
+      if (!tenant_id || !report_type || !title) {
         return send(res, 400, {
           error: "validation_error",
-          message: "tenant_id required"
+          message: "tenant_id, report_type and title required"
         });
       }
 
-      if (!evidence_type) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "evidence_type required"
-        });
-      }
-
-      const evidence_id =
+      const report_id =
         "00000000-0000-4000-8000-" +
         crypto.randomBytes(6).toString("hex");
 
-      const evidence_hash = createAuditHash({
+      const report_hash = createAuditHash({
         tenant_id,
         source_id,
-        object_id,
-        event_id,
-        evidence_type,
+        evidence_id,
+        report_type,
         title,
-        evidence_text,
-        confidence,
-        observed_at
+        report_text,
+        received_at
       });
 
       await db.query(`
-        INSERT INTO runtime_evidence (
-          evidence_id,
+        INSERT INTO runtime_reports (
+          report_id,
           tenant_id,
           source_id,
-          object_id,
-          event_id,
-          evidence_type,
+          evidence_id,
+          report_type,
           title,
-          evidence_text,
-          evidence_hash,
-          confidence,
-          evidence_status,
-          observed_at,
+          report_text,
+          report_status,
+          report_hash,
+          received_at,
           created_by
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'captured',$11,$12)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'captured',$8,COALESCE($9::timestamptz, now()),$10)
       `, [
-        evidence_id,
+        report_id,
         tenant_id,
         source_id,
-        object_id,
-        event_id,
-        evidence_type,
+        evidence_id,
+        report_type,
         title,
-        evidence_text,
-        evidence_hash,
-        confidence,
-        observed_at,
+        report_text,
+        report_hash,
+        received_at,
         created_by
       ]);
 
       await writeEvent({
         tenant_id,
-        object_id,
-        event_type: "runtime.evidence.created",
+        object_id: report_id,
+        event_type: "runtime.report.created",
         message: JSON.stringify({
-          evidence_id,
-          evidence_type,
+          report_id,
+          report_type,
           title,
-          evidence_hash
+          report_hash
         })
       });
 
       return send(res, 201, {
-        evidence: {
-          evidence_id,
+        report: {
+          report_id,
           tenant_id,
           source_id,
-          object_id,
-          event_id,
-          evidence_type,
+          evidence_id,
+          report_type,
           title,
-          evidence_hash,
-          confidence,
-          evidence_status: "captured",
-          observed_at,
+          report_text,
+          report_status: "captured",
+          report_hash,
+          received_at,
           created_by
         }
       });
     }
 
-    if (req.method === "GET" && path === "/runtime/evidence") {
+    if (req.method === "GET" && path === "/runtime/reports") {
       const authUser = verifyToken(req);
 
       if (!authUser) {
@@ -785,249 +2580,130 @@ const server = http.createServer(async (req, res) => {
 
       const result = await db.query(`
         SELECT
-          evidence_id,
+          report_id,
           tenant_id,
           source_id,
-          object_id,
-          event_id,
-          evidence_type,
-          title,
-          evidence_text,
-          evidence_hash,
-          confidence,
-          evidence_status,
-          observed_at,
-          created_at,
-          created_by
-        FROM runtime_evidence
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-        LIMIT 100
-      `, [
-        tenant_id
-      ]);
-
-      return send(res, 200, {
-        evidence: result.rows
-      });
-    }
-
-
-    if (req.method === "POST" && path === "/runtime/witnesses") {
-      const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
-
-      const body = await readBody(req);
-
-      const tenant_id = body.tenant_id || authUser.tenant_id;
-      const witness_type = body.witness_type;
-      const name = body.name;
-      const role = body.role || null;
-      const reliability_score = body.reliability_score || null;
-      const created_by = authUser.operator_id || authUser.role || "runtime_user";
-
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
-      }
-
-      if (!witness_type || !name) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "witness_type and name required"
-        });
-      }
-
-      const witness_id =
-        "00000000-0000-4001-8000-" +
-        crypto.randomBytes(6).toString("hex");
-
-      await db.query(`
-        INSERT INTO runtime_witnesses (
-          witness_id,
-          tenant_id,
-          witness_type,
-          name,
-          role,
-          reliability_score,
-          created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
-      `, [
-        witness_id,
-        tenant_id,
-        witness_type,
-        name,
-        role,
-        reliability_score,
-        created_by
-      ]);
-
-      await writeEvent({
-        tenant_id,
-        object_id: witness_id,
-        event_type: "runtime.witness.created",
-        message: JSON.stringify({
-          witness_id,
-          witness_type,
-          name,
-          role,
-          reliability_score
-        })
-      });
-
-      return send(res, 201, {
-        witness: {
-          witness_id,
-          tenant_id,
-          witness_type,
-          name,
-          role,
-          reliability_score,
-          created_by
-        }
-      });
-    }
-
-    if (req.method === "GET" && path === "/runtime/witnesses") {
-      const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
-
-      const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
-
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
-      }
-
-      const result = await db.query(`
-        SELECT
-          witness_id,
-          tenant_id,
-          witness_type,
-          name,
-          role,
-          reliability_score,
-          created_at,
-          created_by
-        FROM runtime_witnesses
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-        LIMIT 100
-      `, [
-        tenant_id
-      ]);
-
-      return send(res, 200, {
-        witnesses: result.rows
-      });
-    }
-
-    if (req.method === "POST" && path === "/runtime/observations") {
-      const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
-
-      const body = await readBody(req);
-
-      const tenant_id = body.tenant_id || authUser.tenant_id;
-      const witness_id = body.witness_id || null;
-      const evidence_id = body.evidence_id || null;
-      const observation_text = body.observation_text;
-      const observation_time = body.observation_time || null;
-      const confidence = body.confidence || null;
-      const created_by = authUser.operator_id || authUser.role || "runtime_user";
-
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
-      }
-
-      if (!observation_text) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "observation_text required"
-        });
-      }
-
-      const observation_id =
-        "00000000-0000-4002-8000-" +
-        crypto.randomBytes(6).toString("hex");
-
-      await db.query(`
-        INSERT INTO runtime_observations (
-          observation_id,
-          tenant_id,
-          witness_id,
           evidence_id,
-          observation_text,
-          observation_time,
+          report_type,
+          title,
+          report_text,
+          report_status,
+          report_hash,
+          received_at,
+          created_at,
+          created_by
+        FROM runtime_reports
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        reports: result.rows
+      });
+    }
+
+    if (req.method === "POST" && path === "/runtime/report-segments") {
+      const authUser = verifyToken(req);
+
+      if (!authUser) {
+        return send(res, 401, {
+          error: "unauthorized",
+          message: "JWT token required"
+        });
+      }
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const report_id = body.report_id;
+      const segment_type = body.segment_type;
+      const segment_text = body.segment_text;
+      const linked_observation_id = body.linked_observation_id || null;
+      const linked_evidence_id = body.linked_evidence_id || null;
+      const linked_fact_id = body.linked_fact_id || null;
+      const linked_assumption_id = body.linked_assumption_id || null;
+      const linked_hypothesis_id = body.linked_hypothesis_id || null;
+      const confidence = body.confidence || 0.50;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !report_id || !segment_type || !segment_text) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "tenant_id, report_id, segment_type and segment_text required"
+        });
+      }
+
+      const segment_id =
+        "00000000-0000-4000-8000-" +
+        crypto.randomBytes(6).toString("hex");
+
+      await db.query(`
+        INSERT INTO runtime_report_segments (
+          segment_id,
+          tenant_id,
+          report_id,
+          segment_type,
+          segment_text,
+          linked_observation_id,
+          linked_evidence_id,
+          linked_fact_id,
+          linked_assumption_id,
+          linked_hypothesis_id,
           confidence,
+          segment_status,
           created_by
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'extracted',$12)
       `, [
-        observation_id,
+        segment_id,
         tenant_id,
-        witness_id,
-        evidence_id,
-        observation_text,
-        observation_time,
+        report_id,
+        segment_type,
+        segment_text,
+        linked_observation_id,
+        linked_evidence_id,
+        linked_fact_id,
+        linked_assumption_id,
+        linked_hypothesis_id,
         confidence,
         created_by
       ]);
 
       await writeEvent({
         tenant_id,
-        object_id: observation_id,
-        event_type: "runtime.observation.created",
+        object_id: segment_id,
+        event_type: "runtime.report.segment.created",
         message: JSON.stringify({
-          observation_id,
-          witness_id,
-          evidence_id,
+          segment_id,
+          report_id,
+          segment_type,
           confidence
         })
       });
 
       return send(res, 201, {
-        observation: {
-          observation_id,
+        segment: {
+          segment_id,
           tenant_id,
-          witness_id,
-          evidence_id,
-          observation_text,
-          observation_time,
+          report_id,
+          segment_type,
+          segment_text,
+          linked_observation_id,
+          linked_evidence_id,
+          linked_fact_id,
+          linked_assumption_id,
+          linked_hypothesis_id,
           confidence,
+          segment_status: "extracted",
           created_by
         }
       });
     }
 
-    if (req.method === "GET" && path === "/runtime/observations") {
+    if (req.method === "GET" && path === "/runtime/report-segments") {
       const authUser = verifyToken(req);
 
       if (!authUser) {
@@ -1039,6 +2715,7 @@ const server = http.createServer(async (req, res) => {
 
       const urlObj = new URL(req.url, "http://localhost");
       const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const report_id = urlObj.searchParams.get("report_id");
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -1047,575 +2724,439 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      const result = await db.query(`
+      let query = `
         SELECT
-          o.observation_id,
-          o.tenant_id,
-          o.witness_id,
-          w.name AS witness_name,
-          w.witness_type,
-          o.evidence_id,
-          e.title AS evidence_title,
-          o.observation_text,
-          o.observation_time,
-          o.confidence,
-          o.created_at,
-          o.created_by
-        FROM runtime_observations o
-        LEFT JOIN runtime_witnesses w
-          ON w.witness_id = o.witness_id
-        LEFT JOIN runtime_evidence e
-          ON e.evidence_id = o.evidence_id
-        WHERE o.tenant_id = $1
-        ORDER BY o.created_at DESC
-        LIMIT 100
-      `, [
-        tenant_id
-      ]);
+          segment_id,
+          tenant_id,
+          report_id,
+          segment_type,
+          segment_text,
+          linked_observation_id,
+          linked_evidence_id,
+          linked_fact_id,
+          linked_assumption_id,
+          linked_hypothesis_id,
+          confidence,
+          segment_status,
+          created_at,
+          created_by
+        FROM runtime_report_segments
+        WHERE tenant_id = $1
+      `;
+      const params = [tenant_id];
+
+      if (report_id) {
+        params.push(report_id);
+        query += " AND report_id = $" + params.length;
+      }
+
+      query += " ORDER BY created_at DESC LIMIT 100";
+
+      const result = await db.query(query, params);
 
       return send(res, 200, {
-        observations: result.rows
+        report_segments: result.rows
       });
     }
 
 
-    if (req.method === "POST" && path === "/runtime/assumptions") {
-      const authUser = verifyToken(req);
 
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
+    if (req.method === "POST" && path === "/runtime/outcomes") {
+      const authUser = verifyToken(req);
+      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
 
       const body = await readBody(req);
 
       const tenant_id = body.tenant_id || authUser.tenant_id;
-      const evidence_id = body.evidence_id || null;
-      const assumption_text = body.assumption_text;
-      const confidence = body.confidence || null;
-      const status = body.status || "open";
+      const object_id = body.object_id || null;
+      const action_id = body.action_id || null;
+      const outcome_type = body.outcome_type;
+      const outcome_title = body.outcome_title;
+      const outcome_description = body.outcome_description || null;
+      const expected_result = body.expected_result || null;
+      const actual_result = body.actual_result || null;
+      const outcome_status = body.outcome_status || "observed";
+      const observed_at = body.observed_at || null;
       const created_by = authUser.operator_id || authUser.role || "runtime_user";
 
-      if (!tenant_id) {
+      if (!tenant_id || !outcome_type || !outcome_title) {
         return send(res, 400, {
           error: "validation_error",
-          message: "tenant_id required"
+          message: "tenant_id, outcome_type and outcome_title required"
         });
       }
 
-      if (!assumption_text) {
+      const result = await db.query(`
+        INSERT INTO runtime_outcomes (
+          tenant_id, object_id, action_id, outcome_type, outcome_title,
+          outcome_description, expected_result, actual_result,
+          outcome_status, observed_at, created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10::timestamptz, now()),$11)
+        RETURNING *
+      `, [
+        tenant_id, object_id, action_id, outcome_type, outcome_title,
+        outcome_description, expected_result, actual_result,
+        outcome_status, observed_at, created_by
+      ]);
+
+      await writeEvent({
+        tenant_id,
+        object_id: result.rows[0].outcome_id,
+        event_type: "runtime.outcome.created",
+        message: JSON.stringify({
+          outcome_id: result.rows[0].outcome_id,
+          outcome_type,
+          outcome_title
+        })
+      });
+
+      return send(res, 201, { outcome: result.rows[0] });
+    }
+
+    if (req.method === "GET" && path === "/runtime/outcomes") {
+      const authUser = verifyToken(req);
+      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
+
+      const urlObj = new URL(req.url, "http://localhost");
+      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_outcomes
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [tenant_id]);
+
+      return send(res, 200, { outcomes: result.rows });
+    }
+
+    if (req.method === "POST" && path === "/runtime/measurements") {
+      const authUser = verifyToken(req);
+      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
+
+      const body = await readBody(req);
+
+      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const outcome_id = body.outcome_id || null;
+      const metric_name = body.metric_name;
+      const metric_value = body.metric_value === undefined ? null : body.metric_value;
+      const metric_unit = body.metric_unit || null;
+      const target_value = body.target_value === undefined ? null : body.target_value;
+      const variance_value = body.variance_value === undefined ? null : body.variance_value;
+      const measurement_time = body.measurement_time || null;
+      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+
+      if (!tenant_id || !metric_name) {
         return send(res, 400, {
           error: "validation_error",
-          message: "assumption_text required"
+          message: "tenant_id and metric_name required"
         });
       }
 
-      const assumption_id =
-        "00000000-0000-4003-8000-" +
-        crypto.randomBytes(6).toString("hex");
+      const result = await db.query(`
+        INSERT INTO runtime_measurements (
+          tenant_id, outcome_id, metric_name, metric_value, metric_unit,
+          target_value, variance_value, measurement_time, created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8::timestamptz, now()),$9)
+        RETURNING *
+      `, [
+        tenant_id, outcome_id, metric_name, metric_value, metric_unit,
+        target_value, variance_value, measurement_time, created_by
+      ]);
 
-      await db.query(`
-        INSERT INTO runtime_assumptions (
-          assumption_id,
+      await writeEvent({
+        tenant_id,
+        object_id: result.rows[0].measurement_id,
+        event_type: "runtime.measurement.created",
+        message: JSON.stringify({
+          measurement_id: result.rows[0].measurement_id,
+          outcome_id,
+          metric_name,
+          metric_value,
+          metric_unit
+        })
+      });
+
+      // RSOS-060H automatic measurement verification cycle
+      const autoCycle = await db.query(`
+        INSERT INTO runtime_verification_cycles (
           tenant_id,
-          evidence_id,
-          assumption_text,
-          confidence,
-          status,
+          measurement_id,
+          verification_type,
+          verification_status,
+          expected_value,
+          observed_value,
+          verification_result,
+          confidence_before,
+          confidence_after,
           created_by
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        RETURNING *
       `, [
-        assumption_id,
         tenant_id,
-        evidence_id,
-        assumption_text,
-        confidence,
-        status,
+        result.rows[0].measurement_id,
+        "measurement_auto_verification",
+        "pending",
+        "Measurement requires verification",
+        "Measurement created",
+        "awaiting verification",
+        50,
+        50,
+        created_by
+      ]);
+
+      await db.query(`
+        INSERT INTO runtime_verification_checks (
+          tenant_id,
+          measurement_id,
+          verification_cycle_id,
+          check_type,
+          check_status,
+          expected_value,
+          observed_value,
+          check_notes,
+          checked_at,
+          checked_by,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),$9,$9)
+      `, [
+        tenant_id,
+        result.rows[0].measurement_id,
+        autoCycle.rows[0].verification_id,
+        "measurement_created",
+        "pending",
+        "Measurement should be verified",
+        "Measurement created",
+        "Automatic RSOS-060H trigger",
         created_by
       ]);
 
       await writeEvent({
         tenant_id,
-        object_id: assumption_id,
-        event_type: "runtime.assumption.created",
+        object_id: result.rows[0].measurement_id,
+        event_type: "runtime.verification.cycle.auto_created",
         message: JSON.stringify({
-          assumption_id,
-          evidence_id,
-          confidence,
-          status
+          measurement_id: result.rows[0].measurement_id,
+          verification_id: autoCycle.rows[0].verification_id,
+          verification_type: "measurement_auto_verification",
+          verification_status: "pending"
         })
       });
-
-      return send(res, 201, {
-        assumption: {
-          assumption_id,
-          tenant_id,
-          evidence_id,
-          assumption_text,
-          confidence,
-          status,
-          created_by
-        }
-      });
-    }
-
-    if (req.method === "GET" && path === "/runtime/assumptions") {
-      const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
-
-      const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
-
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
-      }
-
-      const result = await db.query(`
-        SELECT
-          a.assumption_id,
-          a.tenant_id,
-          a.evidence_id,
-          e.title AS evidence_title,
-          a.assumption_text,
-          a.confidence,
-          a.status,
-          a.created_at,
-          a.created_by
-        FROM runtime_assumptions a
-        LEFT JOIN runtime_evidence e
-          ON e.evidence_id = a.evidence_id
-        WHERE a.tenant_id = $1
-        ORDER BY a.created_at DESC
-        LIMIT 100
-      `, [
-        tenant_id
-      ]);
-
-      return send(res, 200, {
-        assumptions: result.rows
-      });
-    }
-
-    if (req.method === "POST" && path === "/runtime/hypotheses") {
-      const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
-
-      const body = await readBody(req);
-
-      const tenant_id = body.tenant_id || authUser.tenant_id;
-      const assumption_id = body.assumption_id || null;
-      const hypothesis_text = body.hypothesis_text;
-      const confidence = body.confidence || null;
-      const verification_status = body.verification_status || "unverified";
-      const created_by = authUser.operator_id || authUser.role || "runtime_user";
-
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
-      }
-
-      if (!hypothesis_text) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "hypothesis_text required"
-        });
-      }
-
-      const hypothesis_id =
-        "00000000-0000-4004-8000-" +
-        crypto.randomBytes(6).toString("hex");
-
-      await db.query(`
-        INSERT INTO runtime_hypotheses (
-          hypothesis_id,
-          tenant_id,
-          assumption_id,
-          hypothesis_text,
-          confidence,
-          verification_status,
-          created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
-      `, [
-        hypothesis_id,
-        tenant_id,
-        assumption_id,
-        hypothesis_text,
-        confidence,
-        verification_status,
-        created_by
-      ]);
 
       await writeEvent({
         tenant_id,
-        object_id: hypothesis_id,
-        event_type: "runtime.hypothesis.created",
+        object_id: result.rows[0].measurement_id,
+        event_type: "runtime.verification.check.auto_created",
         message: JSON.stringify({
-          hypothesis_id,
-          assumption_id,
-          confidence,
-          verification_status
+          measurement_id: result.rows[0].measurement_id,
+          verification_id: autoCycle.rows[0].verification_id,
+          check_type: "measurement_created",
+          check_status: "pending"
         })
       });
 
-      return send(res, 201, {
-        hypothesis: {
-          hypothesis_id,
-          tenant_id,
-          assumption_id,
-          hypothesis_text,
-          confidence,
-          verification_status,
-          created_by
-        }
-      });
+      return send(res, 201, { measurement: result.rows[0] });
     }
 
-    if (req.method === "GET" && path === "/runtime/hypotheses") {
+    if (req.method === "GET" && path === "/runtime/measurements") {
       const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
+      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
 
       const urlObj = new URL(req.url, "http://localhost");
       const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const outcome_id = urlObj.searchParams.get("outcome_id");
 
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
+      let query = `
+        SELECT *
+        FROM runtime_measurements
+        WHERE tenant_id = $1
+      `;
+      const params = [tenant_id];
+
+      if (outcome_id) {
+        params.push(outcome_id);
+        query += " AND outcome_id = $" + params.length;
       }
 
-      const result = await db.query(`
-        SELECT
-          h.hypothesis_id,
-          h.tenant_id,
-          h.assumption_id,
-          a.assumption_text,
-          h.hypothesis_text,
-          h.confidence,
-          h.verification_status,
-          h.created_at,
-          h.created_by
-        FROM runtime_hypotheses h
-        LEFT JOIN runtime_assumptions a
-          ON a.assumption_id = h.assumption_id
-        WHERE h.tenant_id = $1
-        ORDER BY h.created_at DESC
-        LIMIT 100
-      `, [
-        tenant_id
-      ]);
+      query += " ORDER BY created_at DESC LIMIT 100";
 
-      return send(res, 200, {
-        hypotheses: result.rows
-      });
+      const result = await db.query(query, params);
+
+      return send(res, 200, { measurements: result.rows });
     }
 
 
-    if (req.method === "POST" && path === "/runtime/verifications") {
-      const authUser = verifyToken(req);
 
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
+    const rsos060WitnessObservationsHandled = await handleRsos060WitnessObservationsRoutes({
+      req,
+      res,
+      path,
+      db,
+      crypto,
+      verifyToken,
+      readBody,
+      writeEvent,
+      send
+    });
+
+    if (rsos060WitnessObservationsHandled !== false) {
+      return rsos060WitnessObservationsHandled;
+    }
+
+
+    const rsos060AssumptionsHypothesesHandled = await handleRsos060AssumptionsHypothesesRoutes({
+      req,
+      res,
+      path,
+      db,
+      crypto,
+      verifyToken,
+      readBody,
+      writeEvent,
+      send
+    });
+
+    if (rsos060AssumptionsHypothesesHandled !== false) {
+      return rsos060AssumptionsHypothesesHandled;
+    }
+
+
+    const rsos060VerificationsHandled = await handleRsos060VerificationsRoutes({
+      req,
+      res,
+      path,
+      db,
+      crypto,
+      verifyToken,
+      readBody,
+      writeEvent,
+      send
+    });
+
+    if (rsos060VerificationsHandled !== false) {
+      return rsos060VerificationsHandled;
+    }
+
+    if (req.method === "POST" && path === "/runtime/verification-cycles") {
+      const authUser = verifyToken(req);
+      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
 
       const body = await readBody(req);
 
       const tenant_id = body.tenant_id || authUser.tenant_id;
+      const outcome_id = body.outcome_id || null;
+      const measurement_id = body.measurement_id || null;
       const hypothesis_id = body.hypothesis_id || null;
-      const verification_method = body.verification_method;
-      const verification_notes = body.verification_notes || null;
-      const status = body.status || "pending";
+      const assumption_id = body.assumption_id || null;
+      const fact_id = body.fact_id || null;
+      const verification_type = body.verification_type;
+      const verification_status = body.verification_status || "pending";
+      const expected_value = body.expected_value || null;
+      const observed_value = body.observed_value || null;
+      const verification_result = body.verification_result || null;
+      const confidence_before = body.confidence_before === undefined ? null : body.confidence_before;
+      const confidence_after = body.confidence_after === undefined ? null : body.confidence_after;
+      const verified_at = body.verified_at || null;
       const created_by = authUser.operator_id || authUser.role || "runtime_user";
 
-      if (!tenant_id) {
+      if (!tenant_id || !verification_type) {
         return send(res, 400, {
           error: "validation_error",
-          message: "tenant_id required"
+          message: "tenant_id and verification_type required"
         });
       }
 
-      if (!verification_method) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "verification_method required"
-        });
-      }
-
-      const verification_id =
-        "00000000-0000-4005-8000-" +
-        crypto.randomBytes(6).toString("hex");
-
-      await db.query(`
-        INSERT INTO runtime_verifications (
-          verification_id,
+      const result = await db.query(`
+        INSERT INTO runtime_verification_cycles (
           tenant_id,
+          outcome_id,
+          measurement_id,
           hypothesis_id,
-          verification_method,
-          verification_notes,
-          status,
+          assumption_id,
+          fact_id,
+          verification_type,
+          verification_status,
+          expected_value,
+          observed_value,
+          verification_result,
+          confidence_before,
+          confidence_after,
+          verified_at,
           created_by
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::timestamptz, NULL),$15)
+        RETURNING *
       `, [
-        verification_id,
         tenant_id,
+        outcome_id,
+        measurement_id,
         hypothesis_id,
-        verification_method,
-        verification_notes,
-        status,
+        assumption_id,
+        fact_id,
+        verification_type,
+        verification_status,
+        expected_value,
+        observed_value,
+        verification_result,
+        confidence_before,
+        confidence_after,
+        verified_at,
         created_by
       ]);
 
       await writeEvent({
         tenant_id,
-        object_id: verification_id,
-        event_type: "runtime.verification.created",
+        object_id: result.rows[0].verification_id,
+        event_type: "runtime.verification_cycle.created",
         message: JSON.stringify({
-          verification_id,
-          hypothesis_id,
-          verification_method,
-          status
+          verification_id: result.rows[0].verification_id,
+          outcome_id,
+          measurement_id,
+          verification_type,
+          verification_status,
+          verification_result
         })
       });
 
-      return send(res, 201, {
-        verification: {
-          verification_id,
-          tenant_id,
-          hypothesis_id,
-          verification_method,
-          verification_notes,
-          status,
-          created_by
-        }
-      });
+      return send(res, 201, { verification_cycle: result.rows[0] });
     }
 
-    if (req.method === "GET" && path === "/runtime/verifications") {
+    if (req.method === "GET" && path === "/runtime/verification-cycles") {
       const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
+      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
 
       const urlObj = new URL(req.url, "http://localhost");
       const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const outcome_id = urlObj.searchParams.get("outcome_id");
+      const measurement_id = urlObj.searchParams.get("measurement_id");
 
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
+      let query = `
+        SELECT *
+        FROM runtime_verification_cycles
+        WHERE tenant_id = $1
+      `;
+      const params = [tenant_id];
+
+      if (outcome_id) {
+        params.push(outcome_id);
+        query += " AND outcome_id = $" + params.length;
       }
 
-      const result = await db.query(`
-        SELECT
-          v.verification_id,
-          v.tenant_id,
-          v.hypothesis_id,
-          h.hypothesis_text,
-          v.verification_method,
-          v.verification_notes,
-          v.status,
-          v.created_at,
-          v.created_by
-        FROM runtime_verifications v
-        LEFT JOIN runtime_hypotheses h
-          ON h.hypothesis_id = v.hypothesis_id
-        WHERE v.tenant_id = $1
-        ORDER BY v.created_at DESC
-        LIMIT 100
-      `, [
-        tenant_id
-      ]);
-
-      return send(res, 200, {
-        verifications: result.rows
-      });
-    }
-
-    if (req.method === "POST" && path === "/runtime/verification-results") {
-      const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
+      if (measurement_id) {
+        params.push(measurement_id);
+        query += " AND measurement_id = $" + params.length;
       }
 
-      const body = await readBody(req);
+      query += " ORDER BY created_at DESC LIMIT 100";
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
-      const verification_id = body.verification_id || null;
-      const result_status = body.result_status;
-      const confidence = body.confidence || null;
-      const accepted_as_fact = body.accepted_as_fact === true;
-      const result_notes = body.result_notes || null;
-      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+      const result = await db.query(query, params);
 
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
-      }
-
-      if (!result_status) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "result_status required"
-        });
-      }
-
-      const result_id =
-        "00000000-0000-4006-8000-" +
-        crypto.randomBytes(6).toString("hex");
-
-      await db.query(`
-        INSERT INTO runtime_verification_results (
-          result_id,
-          tenant_id,
-          verification_id,
-          result_status,
-          confidence,
-          accepted_as_fact,
-          result_notes,
-          created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      `, [
-        result_id,
-        tenant_id,
-        verification_id,
-        result_status,
-        confidence,
-        accepted_as_fact,
-        result_notes,
-        created_by
-      ]);
-
-      if (verification_id) {
-        await db.query(`
-          UPDATE runtime_verifications
-          SET status = $1
-          WHERE tenant_id = $2
-            AND verification_id = $3
-        `, [
-          result_status,
-          tenant_id,
-          verification_id
-        ]);
-      }
-
-      await writeEvent({
-        tenant_id,
-        object_id: result_id,
-        event_type: "runtime.verification_result.created",
-        message: JSON.stringify({
-          result_id,
-          verification_id,
-          result_status,
-          confidence,
-          accepted_as_fact
-        })
-      });
-
-      return send(res, 201, {
-        verification_result: {
-          result_id,
-          tenant_id,
-          verification_id,
-          result_status,
-          confidence,
-          accepted_as_fact,
-          result_notes,
-          created_by
-        }
-      });
-    }
-
-    if (req.method === "GET" && path === "/runtime/verification-results") {
-      const authUser = verifyToken(req);
-
-      if (!authUser) {
-        return send(res, 401, {
-          error: "unauthorized",
-          message: "JWT token required"
-        });
-      }
-
-      const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
-
-      if (!tenant_id) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id required"
-        });
-      }
-
-      const result = await db.query(`
-        SELECT
-          r.result_id,
-          r.tenant_id,
-          r.verification_id,
-          v.hypothesis_id,
-          h.hypothesis_text,
-          r.result_status,
-          r.confidence,
-          r.accepted_as_fact,
-          r.result_notes,
-          r.created_at,
-          r.created_by
-        FROM runtime_verification_results r
-        LEFT JOIN runtime_verifications v
-          ON v.verification_id = r.verification_id
-        LEFT JOIN runtime_hypotheses h
-          ON h.hypothesis_id = v.hypothesis_id
-        WHERE r.tenant_id = $1
-        ORDER BY r.created_at DESC
-        LIMIT 100
-      `, [
-        tenant_id
-      ]);
-
-      return send(res, 200, {
-        verification_results: result.rows
-      });
+      return send(res, 200, { verification_cycles: result.rows });
     }
 
 
@@ -2004,6 +3545,24 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+
+
+
+    const rsos060SourcesHandled = await handleRsos060SourcesRoutes({
+      req,
+      res,
+      path,
+      db,
+      crypto,
+      verifyToken,
+      readBody,
+      writeEvent,
+      send
+    });
+
+    if (rsos060SourcesHandled !== false) {
+      return rsos060SourcesHandled;
+    }
 
     if (req.method === "POST" && path === "/runtime/source-quality") {
       const authUser = verifyToken(req);
@@ -5117,6 +6676,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && path === "/runtime/objects") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin"
       ]);
 
@@ -6349,6 +7909,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path === "/runtime/orchestration-rules") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -6393,6 +7954,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/orchestrations/") && path.endsWith("/trace")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -6556,6 +8118,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path === "/runtime/orchestrations") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -6608,6 +8171,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/communication-summary/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -6737,6 +8301,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/communications/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -7082,6 +8647,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/learning-summary/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -7180,6 +8746,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/learning-evidence/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -7247,6 +8814,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/training-plans/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -7363,6 +8931,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/competencies/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -7427,6 +8996,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path === "/runtime/recommendation-rules") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -7470,6 +9040,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "POST" && path.startsWith("/runtime/recommendations/generate/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -8056,6 +9627,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/recommendations/trace/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -8247,6 +9819,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/recommendations/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -8318,11 +9891,13 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
 
+
     // GET FULL OBJECT TRACE
 
     if (req.method === "GET" && path.startsWith("/runtime/trace/") && path.endsWith("/full")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -8532,6 +10107,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/trace/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -8741,6 +10317,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/governance/path/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -9614,6 +11191,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/tenants/") && path.endsWith("/settings")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -9784,6 +11362,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/tenants/") && path.endsWith("/members")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -9938,6 +11517,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path === "/runtime/learning/dashboard") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -11063,6 +12643,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path === "/runtime/tenants") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -11278,6 +12859,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "GET" && path.startsWith("/runtime/tenants/")) {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin",
         "auditor",
         "governance"
@@ -11474,6 +13056,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
     if (req.method === "POST" && path === "/runtime/schedule") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin"
       ]);
 
@@ -11779,6 +13362,7 @@ async function updateWorkflowState(
     if (req.method === "POST" && path === "/runtime/worker/run") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin"
       ]);
 
@@ -12435,6 +14019,7 @@ async function updateWorkflowState(
     if (req.method === "POST" && path === "/runtime/dead-letter/requeue") {
 
       const auth = requireRole(req, [
+        "system_admin",
         "runtime_admin"
       ]);
 
@@ -12570,6 +14155,2935 @@ async function updateWorkflowState(
     }
 
 
+
+    // RSOS-066B RUNTIME DEFENSE LAYER
+
+    if (req.method === "POST" && path === "/runtime/defense/ingress") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+
+      const payload = body.payload || {};
+      const payload_hash = require("crypto")
+        .createHash("sha256")
+        .update(JSON.stringify(payload))
+        .digest("hex");
+
+      const result = await db.query(`
+        INSERT INTO runtime_ingress_events (
+          tenant_id,
+          source_type,
+          source_id,
+          actor_id,
+          actor_type,
+          request_id,
+          correlation_id,
+          idempotency_key,
+          ingress_channel,
+          ingress_intent,
+          target_object_id,
+          target_object_type,
+          target_action,
+          payload,
+          payload_hash,
+          defense_status,
+          defense_decision,
+          risk_score,
+          confidence_score
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+          'classified',
+          'shadow_validate',
+          $16,
+          $17
+        )
+        RETURNING *
+      `, [
+        tenant_id,
+        body.source_type || "manual",
+        body.source_id || null,
+        auth.user.username || body.actor_id || null,
+        body.actor_type || "user",
+        body.request_id || null,
+        body.correlation_id || null,
+        body.idempotency_key || null,
+        body.ingress_channel || "api",
+        body.ingress_intent || "runtime_change",
+        body.target_object_id || null,
+        body.target_object_type || null,
+        body.target_action || "unknown",
+        JSON.stringify(payload),
+        payload_hash,
+        body.risk_score || 10,
+        body.confidence_score || 70
+      ]);
+
+      const ingress = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.defense.ingress.received",
+        object_id: ingress.target_object_id,
+        message: `Defense ingress received: ${ingress.ingress_id}`,
+        tenant_id
+      });
+
+      await writeEvent({
+        event_type: "runtime.defense.ingress.classified",
+        object_id: ingress.target_object_id,
+        message: `Defense ingress classified: ${ingress.defense_decision}`,
+        tenant_id
+      });
+
+      const defense_pipeline = await executeDefensePipeline(ingress.ingress_id);
+
+      const ingressRefresh = await db.query(`
+        SELECT *
+        FROM runtime_ingress_events
+        WHERE ingress_id = $1
+        LIMIT 1
+      `, [
+        ingress.ingress_id
+      ]);
+
+      const ingress_current = ingressRefresh.rows[0];
+
+      return send(res, 201, {
+        ingress: ingress_current,
+        defense_pipeline
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/ingress") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_ingress_events
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        ingress_events: result.rows
+      });
+    }
+
+    if (req.method === "POST" && path === "/runtime/defense/shadow-validations") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+
+      const result = await db.query(`
+        INSERT INTO runtime_shadow_validations (
+          tenant_id,
+          ingress_id,
+          object_id,
+          object_type,
+          proposed_action,
+          current_state,
+          proposed_state,
+          validation_scope,
+          validation_engine,
+          validation_status,
+          validation_decision,
+          risk_score,
+          confidence_score,
+          findings,
+          required_actions,
+          completed_at
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,
+          'passed_with_warnings',
+          'requires_human_review',
+          $10,$11,$12,$13,now()
+        )
+        RETURNING *
+      `, [
+        tenant_id,
+        body.ingress_id,
+        body.object_id || null,
+        body.object_type || null,
+        body.proposed_action || "unknown",
+        JSON.stringify(body.current_state || {}),
+        JSON.stringify(body.proposed_state || {}),
+        body.validation_scope || "runtime_write",
+        body.validation_engine || "rsos-defense-shadow-v1",
+        body.risk_score || 20,
+        body.confidence_score || 75,
+        JSON.stringify(body.findings || []),
+        JSON.stringify(body.required_actions || [])
+      ]);
+
+      const validation = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.defense.shadow_validation.completed",
+        object_id: validation.object_id,
+        message: `Shadow validation completed: ${validation.shadow_validation_id}`,
+        tenant_id
+      });
+
+      return send(res, 201, {
+        shadow_validation: validation
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/shadow-validations") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_shadow_validations
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        shadow_validations: result.rows
+      });
+    }
+
+    if (req.method === "POST" && path === "/runtime/defense/quarantine") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+
+      const result = await db.query(`
+        INSERT INTO runtime_quarantine_queue (
+          tenant_id,
+          ingress_id,
+          quarantine_reason,
+          severity,
+          category,
+          object_id,
+          object_type,
+          proposed_action,
+          proposed_payload,
+          detected_by,
+          detection_details,
+          required_approval_level
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+        )
+        RETURNING *
+      `, [
+        tenant_id,
+        body.ingress_id,
+        body.quarantine_reason || "defense_review_required",
+        body.severity || "medium",
+        body.category || "runtime_defense",
+        body.object_id || null,
+        body.object_type || null,
+        body.proposed_action || "unknown",
+        JSON.stringify(body.proposed_payload || {}),
+        body.detected_by || "runtime_defense_layer",
+        JSON.stringify(body.detection_details || {}),
+        body.required_approval_level || "runtime_admin"
+      ]);
+
+      const quarantine = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.defense.quarantine.created",
+        object_id: quarantine.object_id,
+        message: `Quarantine item created: ${quarantine.quarantine_id}`,
+        tenant_id
+      });
+
+      return send(res, 201, {
+        quarantine
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/quarantine") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_quarantine_queue
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        quarantine_queue: result.rows
+      });
+    }
+
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/quarantine/") && path.endsWith("/review")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const quarantine_id = path
+        .replace("/runtime/defense/quarantine/", "")
+        .replace("/review", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        UPDATE runtime_quarantine_queue
+        SET
+          status = 'under_review',
+          assigned_to = COALESCE($3, assigned_to),
+          reviewed_by = $4,
+          reviewed_at = now(),
+          review_comment = $5,
+          updated_at = now()
+        WHERE quarantine_id = $1
+          AND tenant_id = $2
+        RETURNING *
+      `, [
+        quarantine_id,
+        tenant_id,
+        body.assigned_to || null,
+        auth.user.username || auth.user.operator_id || "system",
+        body.review_comment || "review_started"
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "quarantine item not found"
+        });
+      }
+
+      const quarantine = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.defense.quarantine.review_started",
+        object_id: quarantine.object_id,
+        message: `Quarantine review started: ${quarantine.quarantine_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        quarantine
+      });
+    }
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/quarantine/") && path.endsWith("/approve")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const quarantine_id = path
+        .replace("/runtime/defense/quarantine/", "")
+        .replace("/approve", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        UPDATE runtime_quarantine_queue
+        SET
+          status = 'approved_for_apply',
+          reviewed_by = $3,
+          reviewed_at = now(),
+          review_decision = 'approved',
+          review_comment = $4,
+          updated_at = now()
+        WHERE quarantine_id = $1
+          AND tenant_id = $2
+        RETURNING *
+      `, [
+        quarantine_id,
+        tenant_id,
+        auth.user.username || auth.user.operator_id || "system",
+        body.review_comment || "approved by runtime defense review"
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "quarantine item not found"
+        });
+      }
+
+      const quarantine = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.defense.quarantine.approved",
+        object_id: quarantine.object_id,
+        message: `Quarantine approved: ${quarantine.quarantine_id}`,
+        tenant_id
+      });
+
+      await db.query(`
+        UPDATE runtime_ingress_events
+        SET
+          defense_status = 'approved',
+          defense_decision = 'allow_after_review'
+        WHERE ingress_id = $1
+          AND tenant_id = $2
+      `, [
+        quarantine.ingress_id,
+        tenant_id
+      ]);
+
+      await db.query(`
+        UPDATE runtime_defense_state
+        SET
+          open_quarantine_count = (
+            SELECT COUNT(*)
+            FROM runtime_quarantine_queue
+            WHERE tenant_id = $1
+              AND status = 'open'
+          ),
+          state_reason = 'quarantine approved',
+          updated_by = $2,
+          updated_at = now()
+        WHERE tenant_id = $1
+      `, [
+        tenant_id,
+        auth.user.username || auth.user.operator_id || "system"
+      ]);
+
+      return send(res, 200, {
+        quarantine
+      });
+    }
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/quarantine/") && path.endsWith("/reject")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const quarantine_id = path
+        .replace("/runtime/defense/quarantine/", "")
+        .replace("/reject", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        UPDATE runtime_quarantine_queue
+        SET
+          status = 'rejected',
+          reviewed_by = $3,
+          reviewed_at = now(),
+          review_decision = 'rejected',
+          review_comment = $4,
+          updated_at = now()
+        WHERE quarantine_id = $1
+          AND tenant_id = $2
+        RETURNING *
+      `, [
+        quarantine_id,
+        tenant_id,
+        auth.user.username || auth.user.operator_id || "system",
+        body.review_comment || "rejected by runtime defense review"
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "quarantine item not found"
+        });
+      }
+
+      const quarantine = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.defense.quarantine.rejected",
+        object_id: quarantine.object_id,
+        message: `Quarantine rejected: ${quarantine.quarantine_id}`,
+        tenant_id
+      });
+
+      await db.query(`
+        UPDATE runtime_ingress_events
+        SET
+          defense_status = 'rejected',
+          defense_decision = 'reject_after_review'
+        WHERE ingress_id = $1
+          AND tenant_id = $2
+      `, [
+        quarantine.ingress_id,
+        tenant_id
+      ]);
+
+      await db.query(`
+        UPDATE runtime_defense_state
+        SET
+          open_quarantine_count = (
+            SELECT COUNT(*)
+            FROM runtime_quarantine_queue
+            WHERE tenant_id = $1
+              AND status = 'open'
+          ),
+          recent_rejection_count = recent_rejection_count + 1,
+          state_reason = 'quarantine rejected',
+          updated_by = $2,
+          updated_at = now()
+        WHERE tenant_id = $1
+      `, [
+        tenant_id,
+        auth.user.username || auth.user.operator_id || "system"
+      ]);
+
+      return send(res, 200, {
+        quarantine
+      });
+    }
+
+    if (req.method === "POST" && path === "/runtime/defense/savepoints") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+      const previous_state = body.previous_state || {};
+      const previous_state_hash = require("crypto")
+        .createHash("sha256")
+        .update(JSON.stringify(previous_state))
+        .digest("hex");
+
+      const result = await db.query(`
+        INSERT INTO runtime_savepoints (
+          tenant_id,
+          object_id,
+          object_type,
+          created_for_ingress_id,
+          created_for_action,
+          previous_state,
+          previous_state_hash,
+          savepoint_reason,
+          criticality
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9
+        )
+        RETURNING *
+      `, [
+        tenant_id,
+        body.object_id,
+        body.object_type,
+        body.created_for_ingress_id || null,
+        body.created_for_action || "runtime_change",
+        JSON.stringify(previous_state),
+        previous_state_hash,
+        body.savepoint_reason || "pre_change_defense_savepoint",
+        body.criticality || "medium"
+      ]);
+
+      const savepoint = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.defense.savepoint.created",
+        object_id: savepoint.object_id,
+        message: `Defense savepoint created: ${savepoint.savepoint_id}`,
+        tenant_id
+      });
+
+      return send(res, 201, {
+        savepoint
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/savepoints") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_savepoints
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        savepoints: result.rows
+      });
+    }
+
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/savepoints/") && path.endsWith("/rollback")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const savepoint_id = path
+        .replace("/runtime/defense/savepoints/", "")
+        .replace("/rollback", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const savepointResult = await db.query(`
+        SELECT *
+        FROM runtime_savepoints
+        WHERE savepoint_id = $1
+          AND tenant_id = $2
+        LIMIT 1
+      `, [
+        savepoint_id,
+        tenant_id
+      ]);
+
+      if (savepointResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "savepoint not found"
+        });
+      }
+
+      const savepoint = savepointResult.rows[0];
+
+      if (savepoint.rollback_status !== "available") {
+        return send(res, 409, {
+          error: "rollback_not_available",
+          message: `savepoint rollback_status is ${savepoint.rollback_status}`,
+          savepoint
+        });
+      }
+
+      const previous_state = savepoint.previous_state || {};
+      const restored_runtime_type =
+        previous_state.runtime_type ||
+        previous_state.type ||
+        savepoint.object_type ||
+        "restored_object";
+
+      const restored_state =
+        previous_state.state ||
+        previous_state.status ||
+        "restored";
+
+      const restored_priority =
+        previous_state.priority ||
+        "normal";
+
+      const restored_risk_score =
+        Number(previous_state.risk_score || 0);
+
+      await writeEvent({
+        event_type: "runtime.defense.savepoint.rollback.started",
+        object_id: String(savepoint.object_id),
+        message: `Rollback started from savepoint: ${savepoint.savepoint_id}`,
+        tenant_id
+      });
+
+      const runtimeResult = await db.query(`
+        INSERT INTO runtime_objects (
+          object_id,
+          runtime_type,
+          state,
+          priority,
+          risk_score,
+          tenant_id
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6
+        )
+        ON CONFLICT (object_id)
+        DO UPDATE SET
+          runtime_type = EXCLUDED.runtime_type,
+          state = EXCLUDED.state,
+          priority = EXCLUDED.priority,
+          risk_score = EXCLUDED.risk_score,
+          tenant_id = EXCLUDED.tenant_id
+        RETURNING *
+      `, [
+        String(savepoint.object_id),
+        restored_runtime_type,
+        restored_state,
+        restored_priority,
+        restored_risk_score,
+        tenant_id
+      ]);
+
+      const rollbackEventId = crypto.randomUUID();
+
+      await db.query(`
+        UPDATE runtime_savepoints
+        SET
+          rollback_status = 'used',
+          rollback_event_id = $3,
+          rolled_back_by = $4,
+          rolled_back_at = now()
+        WHERE savepoint_id = $1
+          AND tenant_id = $2
+      `, [
+        savepoint_id,
+        tenant_id,
+        rollbackEventId,
+        actor_id
+      ]);
+
+      await db.query(`
+        UPDATE runtime_defense_state
+        SET
+          defense_mode = 'recovery',
+          defense_level = 'elevated',
+          state_reason = $2,
+          updated_by = $3,
+          updated_at = now()
+        WHERE tenant_id = $1
+      `, [
+        tenant_id,
+        body.rollback_reason || "runtime rollback executed",
+        actor_id
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.defense.savepoint.rollback.completed",
+        object_id: String(savepoint.object_id),
+        message: `Rollback completed from savepoint: ${savepoint.savepoint_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        rollback: {
+          rollback_event_id: rollbackEventId,
+          savepoint_id,
+          object_id: String(savepoint.object_id),
+          status: "completed",
+          reason: body.rollback_reason || "runtime rollback executed"
+        },
+        restored_object: runtimeResult.rows[0]
+      });
+    }
+
+
+    if (req.method === "POST" && path === "/runtime/defense/recovery-requests") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const result = await db.query(`
+        INSERT INTO runtime_recovery_requests (
+          tenant_id,
+          quarantine_id,
+          savepoint_id,
+          request_type,
+          request_reason,
+          requested_by
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6
+        )
+        RETURNING *
+      `, [
+        tenant_id,
+        body.quarantine_id || null,
+        body.savepoint_id || null,
+        body.request_type || "rollback",
+        body.request_reason || "runtime recovery requested",
+        actor_id
+      ]);
+
+      const recovery_request = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.recovery.request.created",
+        object_id: body.savepoint_id || body.quarantine_id || null,
+        message: `Recovery request created: ${recovery_request.recovery_request_id}`,
+        tenant_id
+      });
+
+      return send(res, 201, {
+        recovery_request
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/recovery-requests") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_recovery_requests
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        recovery_requests: result.rows
+      });
+    }
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/recovery-requests/") && path.endsWith("/review")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const recovery_request_id = path
+        .replace("/runtime/defense/recovery-requests/", "")
+        .replace("/review", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const result = await db.query(`
+        UPDATE runtime_recovery_requests
+        SET
+          review_status = 'under_review',
+          reviewed_by = $3,
+          reviewed_at = now(),
+          review_comment = $4,
+          updated_at = now()
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+        RETURNING *
+      `, [
+        recovery_request_id,
+        tenant_id,
+        actor_id,
+        body.review_comment || "recovery review started"
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "recovery request not found"
+        });
+      }
+
+      const recovery_request = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.recovery.request.review_started",
+        object_id: recovery_request.savepoint_id || recovery_request.quarantine_id,
+        message: `Recovery request review started: ${recovery_request.recovery_request_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        recovery_request
+      });
+    }
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/recovery-requests/") && path.endsWith("/approve")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const recovery_request_id = path
+        .replace("/runtime/defense/recovery-requests/", "")
+        .replace("/approve", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const result = await db.query(`
+        UPDATE runtime_recovery_requests
+        SET
+          review_status = 'approved',
+          reviewed_by = $3,
+          reviewed_at = now(),
+          review_comment = $4,
+          updated_at = now()
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+        RETURNING *
+      `, [
+        recovery_request_id,
+        tenant_id,
+        actor_id,
+        body.review_comment || "recovery request approved"
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "recovery request not found"
+        });
+      }
+
+      const recovery_request = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.recovery.request.approved",
+        object_id: recovery_request.savepoint_id || recovery_request.quarantine_id,
+        message: `Recovery request approved: ${recovery_request.recovery_request_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        recovery_request
+      });
+    }
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/recovery-requests/") && path.endsWith("/reject")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const recovery_request_id = path
+        .replace("/runtime/defense/recovery-requests/", "")
+        .replace("/reject", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const result = await db.query(`
+        UPDATE runtime_recovery_requests
+        SET
+          review_status = 'rejected',
+          reviewed_by = $3,
+          reviewed_at = now(),
+          review_comment = $4,
+          execution_status = 'blocked',
+          updated_at = now()
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+        RETURNING *
+      `, [
+        recovery_request_id,
+        tenant_id,
+        actor_id,
+        body.review_comment || "recovery request rejected"
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "recovery request not found"
+        });
+      }
+
+      const recovery_request = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.recovery.request.rejected",
+        object_id: recovery_request.savepoint_id || recovery_request.quarantine_id,
+        message: `Recovery request rejected: ${recovery_request.recovery_request_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        recovery_request
+      });
+    }
+
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/recovery-requests/") && path.endsWith("/execute")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const recovery_request_id = path
+        .replace("/runtime/defense/recovery-requests/", "")
+        .replace("/execute", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const requestResult = await db.query(`
+        SELECT *
+        FROM runtime_recovery_requests
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+        LIMIT 1
+      `, [
+        recovery_request_id,
+        tenant_id
+      ]);
+
+      if (requestResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "recovery request not found"
+        });
+      }
+
+      const recovery_request = requestResult.rows[0];
+
+      if (recovery_request.review_status !== "approved") {
+        return send(res, 409, {
+          error: "recovery_not_approved",
+          message: `review_status is ${recovery_request.review_status}`,
+          recovery_request
+        });
+      }
+
+      if (recovery_request.execution_status !== "pending") {
+        return send(res, 409, {
+          error: "recovery_not_pending",
+          message: `execution_status is ${recovery_request.execution_status}`,
+          recovery_request
+        });
+      }
+
+      if (!recovery_request.savepoint_id) {
+        return send(res, 400, {
+          error: "missing_savepoint",
+          message: "recovery request has no savepoint_id"
+        });
+      }
+
+      await db.query(`
+        UPDATE runtime_recovery_requests
+        SET
+          execution_status = 'executing',
+          updated_at = now()
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+      `, [
+        recovery_request_id,
+        tenant_id
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.recovery.execution.started",
+        object_id: recovery_request.savepoint_id,
+        message: `Recovery execution started: ${recovery_request_id}`,
+        tenant_id
+      });
+
+      const savepointResult = await db.query(`
+        SELECT *
+        FROM runtime_savepoints
+        WHERE savepoint_id = $1
+          AND tenant_id = $2
+        LIMIT 1
+      `, [
+        recovery_request.savepoint_id,
+        tenant_id
+      ]);
+
+      if (savepointResult.rows.length === 0) {
+        await db.query(`
+          UPDATE runtime_recovery_requests
+          SET
+            execution_status = 'failed',
+            verification_status = 'savepoint_not_found',
+            updated_at = now()
+          WHERE recovery_request_id = $1
+            AND tenant_id = $2
+        `, [
+          recovery_request_id,
+          tenant_id
+        ]);
+
+        return send(res, 404, {
+          error: "savepoint_not_found",
+          message: "linked savepoint not found"
+        });
+      }
+
+      const savepoint = savepointResult.rows[0];
+
+      if (savepoint.rollback_status !== "available") {
+        await db.query(`
+          UPDATE runtime_recovery_requests
+          SET
+            execution_status = 'failed',
+            verification_status = 'savepoint_not_available',
+            updated_at = now()
+          WHERE recovery_request_id = $1
+            AND tenant_id = $2
+        `, [
+          recovery_request_id,
+          tenant_id
+        ]);
+
+        return send(res, 409, {
+          error: "savepoint_not_available",
+          message: `savepoint rollback_status is ${savepoint.rollback_status}`,
+          savepoint
+        });
+      }
+
+      const previous_state = savepoint.previous_state || {};
+      const restored_runtime_type =
+        previous_state.runtime_type ||
+        previous_state.type ||
+        savepoint.object_type ||
+        "restored_object";
+
+      const restored_state =
+        previous_state.state ||
+        previous_state.status ||
+        "restored";
+
+      const restored_priority =
+        previous_state.priority ||
+        "normal";
+
+      const restored_risk_score =
+        Number(previous_state.risk_score || 0);
+
+      const runtimeResult = await db.query(`
+        INSERT INTO runtime_objects (
+          object_id,
+          runtime_type,
+          state,
+          priority,
+          risk_score,
+          tenant_id
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6
+        )
+        ON CONFLICT (object_id)
+        DO UPDATE SET
+          runtime_type = EXCLUDED.runtime_type,
+          state = EXCLUDED.state,
+          priority = EXCLUDED.priority,
+          risk_score = EXCLUDED.risk_score,
+          tenant_id = EXCLUDED.tenant_id
+        RETURNING *
+      `, [
+        String(savepoint.object_id),
+        restored_runtime_type,
+        restored_state,
+        restored_priority,
+        restored_risk_score,
+        tenant_id
+      ]);
+
+      const rollbackEventId = crypto.randomUUID();
+
+      await db.query(`
+        UPDATE runtime_savepoints
+        SET
+          rollback_status = 'used',
+          rollback_event_id = $3,
+          rolled_back_by = $4,
+          rolled_back_at = now()
+        WHERE savepoint_id = $1
+          AND tenant_id = $2
+      `, [
+        savepoint.savepoint_id,
+        tenant_id,
+        rollbackEventId,
+        actor_id
+      ]);
+
+      await db.query(`
+        UPDATE runtime_recovery_requests
+        SET
+          execution_status = 'completed',
+          rollback_event_id = $3,
+          verification_status = 'restored',
+          updated_at = now()
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+        RETURNING *
+      `, [
+        recovery_request_id,
+        tenant_id,
+        rollbackEventId
+      ]);
+
+      const finalResult = await db.query(`
+        SELECT *
+        FROM runtime_recovery_requests
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+        LIMIT 1
+      `, [
+        recovery_request_id,
+        tenant_id
+      ]);
+
+      await db.query(`
+        UPDATE runtime_defense_state
+        SET
+          defense_mode = 'recovery',
+          defense_level = 'elevated',
+          state_reason = $2,
+          updated_by = $3,
+          updated_at = now()
+        WHERE tenant_id = $1
+      `, [
+        tenant_id,
+        body.execution_reason || "approved recovery executed",
+        actor_id
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.recovery.execution.completed",
+        object_id: savepoint.object_id,
+        message: `Recovery execution completed: ${recovery_request_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        recovery_request: finalResult.rows[0],
+        rollback: {
+          rollback_event_id: rollbackEventId,
+          savepoint_id: savepoint.savepoint_id,
+          object_id: String(savepoint.object_id),
+          status: "completed"
+        },
+        restored_object: runtimeResult.rows[0]
+      });
+    }
+
+
+    if (req.method === "POST" && path === "/runtime/defense/recovery-verifications") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const recoveryResult = await db.query(`
+        SELECT *
+        FROM runtime_recovery_requests
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+        LIMIT 1
+      `, [
+        body.recovery_request_id,
+        tenant_id
+      ]);
+
+      if (recoveryResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "recovery request not found"
+        });
+      }
+
+      const recovery_request = recoveryResult.rows[0];
+
+      if (recovery_request.execution_status !== "completed") {
+        return send(res, 409, {
+          error: "recovery_not_completed",
+          message: `execution_status is ${recovery_request.execution_status}`,
+          recovery_request
+        });
+      }
+
+      const verification_status =
+        body.verification_status || "verified";
+
+      const closure_status =
+        verification_status === "verified"
+          ? "ready_to_close"
+          : "pending";
+
+      const result = await db.query(`
+        INSERT INTO runtime_recovery_verifications (
+          tenant_id,
+          recovery_request_id,
+          savepoint_id,
+          verification_status,
+          verification_result,
+          verified_by,
+          closure_status,
+          notes
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8
+        )
+        RETURNING *
+      `, [
+        tenant_id,
+        body.recovery_request_id,
+        recovery_request.savepoint_id,
+        verification_status,
+        JSON.stringify(body.verification_result || {}),
+        actor_id,
+        closure_status,
+        body.notes || null
+      ]);
+
+      const verification = result.rows[0];
+
+      await db.query(`
+        UPDATE runtime_recovery_requests
+        SET
+          verification_status = $3,
+          updated_at = now()
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+      `, [
+        body.recovery_request_id,
+        tenant_id,
+        verification_status
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.recovery.verification.created",
+        object_id: recovery_request.savepoint_id,
+        message: `Recovery verification created: ${verification.verification_id}`,
+        tenant_id
+      });
+
+      return send(res, 201, {
+        verification
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/recovery-verifications") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_recovery_verifications
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        recovery_verifications: result.rows
+      });
+    }
+
+    if (req.method === "POST" && path.startsWith("/runtime/defense/recovery-verifications/") && path.endsWith("/close")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const verification_id = path
+        .replace("/runtime/defense/recovery-verifications/", "")
+        .replace("/close", "");
+
+      const body = await readBody(req);
+      const tenant_id = auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const result = await db.query(`
+        UPDATE runtime_recovery_verifications
+        SET
+          closure_status = 'closed',
+          notes = COALESCE($3, notes)
+        WHERE verification_id = $1
+          AND tenant_id = $2
+          AND verification_status = 'verified'
+        RETURNING *
+      `, [
+        verification_id,
+        tenant_id,
+        body.notes || null
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 409, {
+          error: "closure_not_allowed",
+          message: "verification not found or verification_status is not verified"
+        });
+      }
+
+      const verification = result.rows[0];
+
+      await db.query(`
+        UPDATE runtime_recovery_requests
+        SET
+          verification_status = 'closed',
+          updated_at = now()
+        WHERE recovery_request_id = $1
+          AND tenant_id = $2
+      `, [
+        verification.recovery_request_id,
+        tenant_id
+      ]);
+
+      await db.query(`
+        UPDATE runtime_defense_state
+        SET
+          state_reason = $2,
+          updated_by = $3,
+          updated_at = now()
+        WHERE tenant_id = $1
+      `, [
+        tenant_id,
+        body.notes || "recovery verified and closed",
+        actor_id
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.recovery.verification.closed",
+        object_id: verification.savepoint_id,
+        message: `Recovery verification closed: ${verification.verification_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        verification
+      });
+    }
+
+
+    if (req.method === "POST" && path === "/runtime/defense/metrics/recalculate") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+      const metric_date = body.metric_date || new Date().toISOString().slice(0, 10);
+
+      const result = await db.query(`
+        WITH ingress AS (
+          SELECT
+            COUNT(*)::int AS ingress_count,
+            COUNT(*) FILTER (WHERE defense_decision = 'allow')::int AS allow_count,
+            COUNT(*) FILTER (WHERE defense_decision IN ('shadow_validate', 'allow_after_review'))::int AS shadow_validation_count,
+            COUNT(*) FILTER (WHERE defense_decision IN ('quarantine', 'reject_after_review'))::int AS quarantine_count,
+            COALESCE(AVG(risk_score), 0)::numeric(10,2) AS avg_risk_score,
+            COALESCE(AVG(confidence_score), 0)::numeric(10,2) AS avg_confidence_score
+          FROM runtime_ingress_events
+          WHERE tenant_id = $1
+            AND created_at::date = $2::date
+        ),
+        quarantine AS (
+          SELECT
+            COUNT(*) FILTER (WHERE status IN ('under_review', 'approved_for_apply', 'rejected'))::int AS review_count,
+            COUNT(*) FILTER (WHERE status = 'approved_for_apply')::int AS approved_count,
+            COUNT(*) FILTER (WHERE status = 'rejected')::int AS rejected_count
+          FROM runtime_quarantine_queue
+          WHERE tenant_id = $1
+            AND created_at::date = $2::date
+        ),
+        recovery AS (
+          SELECT
+            COUNT(*)::int AS recovery_request_count,
+            COUNT(*) FILTER (WHERE execution_status = 'completed')::int AS recovery_completed_count
+          FROM runtime_recovery_requests
+          WHERE tenant_id = $1
+            AND created_at::date = $2::date
+        ),
+        verification AS (
+          SELECT
+            COUNT(*) FILTER (WHERE verification_status = 'verified')::int AS verification_count,
+            COUNT(*) FILTER (WHERE closure_status = 'closed')::int AS closure_count
+          FROM runtime_recovery_verifications
+          WHERE tenant_id = $1
+            AND created_at::date = $2::date
+        )
+        INSERT INTO runtime_defense_metrics (
+          tenant_id,
+          metric_date,
+          ingress_count,
+          allow_count,
+          shadow_validation_count,
+          quarantine_count,
+          review_count,
+          approved_count,
+          rejected_count,
+          recovery_request_count,
+          recovery_completed_count,
+          verification_count,
+          closure_count,
+          avg_risk_score,
+          avg_confidence_score
+        )
+        SELECT
+          $1,
+          $2::date,
+          ingress.ingress_count,
+          ingress.allow_count,
+          ingress.shadow_validation_count,
+          ingress.quarantine_count,
+          quarantine.review_count,
+          quarantine.approved_count,
+          quarantine.rejected_count,
+          recovery.recovery_request_count,
+          recovery.recovery_completed_count,
+          verification.verification_count,
+          verification.closure_count,
+          ingress.avg_risk_score,
+          ingress.avg_confidence_score
+        FROM ingress, quarantine, recovery, verification
+        ON CONFLICT (tenant_id, metric_date)
+        DO UPDATE SET
+          ingress_count = EXCLUDED.ingress_count,
+          allow_count = EXCLUDED.allow_count,
+          shadow_validation_count = EXCLUDED.shadow_validation_count,
+          quarantine_count = EXCLUDED.quarantine_count,
+          review_count = EXCLUDED.review_count,
+          approved_count = EXCLUDED.approved_count,
+          rejected_count = EXCLUDED.rejected_count,
+          recovery_request_count = EXCLUDED.recovery_request_count,
+          recovery_completed_count = EXCLUDED.recovery_completed_count,
+          verification_count = EXCLUDED.verification_count,
+          closure_count = EXCLUDED.closure_count,
+          avg_risk_score = EXCLUDED.avg_risk_score,
+          avg_confidence_score = EXCLUDED.avg_confidence_score
+        RETURNING *
+      `, [
+        tenant_id,
+        metric_date
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.defense.metrics.recalculated",
+        object_id: null,
+        message: `Defense metrics recalculated for ${tenant_id} on ${metric_date}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        metrics: result.rows[0]
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/metrics") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_defense_metrics
+        WHERE tenant_id = $1
+        ORDER BY metric_date DESC
+        LIMIT 30
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        metrics: result.rows
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/dashboard") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const metricsResult = await db.query(`
+        SELECT *
+        FROM runtime_defense_metrics
+        WHERE tenant_id = $1
+        ORDER BY metric_date DESC
+        LIMIT 1
+      `, [
+        tenant_id
+      ]);
+
+      const stateResult = await db.query(`
+        SELECT *
+        FROM runtime_defense_state
+        WHERE tenant_id = $1
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `, [
+        tenant_id
+      ]);
+
+      const latest_metrics = metricsResult.rows[0] || null;
+
+      let kpi_ratios = null;
+
+      if (latest_metrics) {
+        const ingress_count = Number(latest_metrics.ingress_count || 0);
+        const quarantine_count = Number(latest_metrics.quarantine_count || 0);
+        const allow_count = Number(latest_metrics.allow_count || 0);
+        const shadow_validation_count = Number(latest_metrics.shadow_validation_count || 0);
+        const recovery_request_count = Number(latest_metrics.recovery_request_count || 0);
+        const recovery_completed_count = Number(latest_metrics.recovery_completed_count || 0);
+        const verification_count = Number(latest_metrics.verification_count || 0);
+        const closure_count = Number(latest_metrics.closure_count || 0);
+        const rejected_count = Number(latest_metrics.rejected_count || 0);
+        const approved_count = Number(latest_metrics.approved_count || 0);
+
+        const ratio = (part, total) => {
+          if (!total || total === 0) return 0;
+          return Math.round((part / total) * 10000) / 100;
+        };
+
+        kpi_ratios = {
+          allow_rate_percent: ratio(allow_count, ingress_count),
+          shadow_validation_rate_percent: ratio(shadow_validation_count, ingress_count),
+          quarantine_rate_percent: ratio(quarantine_count, ingress_count),
+          recovery_success_rate_percent: ratio(recovery_completed_count, recovery_request_count),
+          verification_rate_percent: ratio(verification_count, recovery_completed_count),
+          closure_rate_percent: ratio(closure_count, verification_count),
+          rejection_rate_percent: ratio(rejected_count, rejected_count + approved_count),
+          avg_risk_score: Number(latest_metrics.avg_risk_score || 0),
+          avg_confidence_score: Number(latest_metrics.avg_confidence_score || 0)
+        };
+      }
+
+      return send(res, 200, {
+        dashboard: {
+          latest_metrics,
+          kpi_ratios,
+          defense_state: stateResult.rows[0] || null
+        }
+      });
+    }
+
+
+    if (req.method === "POST" && path === "/runtime/audit-reports/generate") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+      const actor_id = auth.user.username || auth.user.operator_id || "system";
+
+      const period_start = body.period_start || new Date().toISOString().slice(0, 10);
+      const period_end = body.period_end || period_start;
+      const report_type = body.report_type || "defense_recovery_audit";
+
+      const metricsResult = await db.query(`
+        SELECT *
+        FROM runtime_defense_metrics
+        WHERE tenant_id = $1
+          AND metric_date BETWEEN $2::date AND $3::date
+        ORDER BY metric_date ASC
+      `, [
+        tenant_id,
+        period_start,
+        period_end
+      ]);
+
+      const stateResult = await db.query(`
+        SELECT *
+        FROM runtime_defense_state
+        WHERE tenant_id = $1
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `, [
+        tenant_id
+      ]);
+
+      const quarantineResult = await db.query(`
+        SELECT *
+        FROM runtime_quarantine_queue
+        WHERE tenant_id = $1
+          AND created_at::date BETWEEN $2::date AND $3::date
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id,
+        period_start,
+        period_end
+      ]);
+
+      const recoveryResult = await db.query(`
+        SELECT *
+        FROM runtime_recovery_requests
+        WHERE tenant_id = $1
+          AND created_at::date BETWEEN $2::date AND $3::date
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id,
+        period_start,
+        period_end
+      ]);
+
+      const verificationResult = await db.query(`
+        SELECT *
+        FROM runtime_recovery_verifications
+        WHERE tenant_id = $1
+          AND created_at::date BETWEEN $2::date AND $3::date
+        ORDER BY created_at DESC
+        LIMIT 100
+      `, [
+        tenant_id,
+        period_start,
+        period_end
+      ]);
+
+      const report_data = {
+        report_context: {
+          report_type,
+          tenant_id,
+          period_start,
+          period_end,
+          generated_by: actor_id
+        },
+        executive_summary: {
+          purpose: "Defense and recovery audit evidence snapshot",
+          closure_ready: verificationResult.rows.some(v => v.closure_status === "closed"),
+          recovery_completed: recoveryResult.rows.some(r => r.execution_status === "completed"),
+          open_quarantine_count: quarantineResult.rows.filter(q => q.status === "open").length
+        },
+        metrics: metricsResult.rows,
+        defense_state: stateResult.rows[0] || null,
+        quarantines: quarantineResult.rows,
+        recovery_requests: recoveryResult.rows,
+        recovery_verifications: verificationResult.rows
+      };
+
+      const result = await db.query(`
+        INSERT INTO runtime_audit_reports (
+          tenant_id,
+          report_type,
+          report_period_start,
+          report_period_end,
+          generated_by,
+          report_data
+        )
+        VALUES (
+          $1,$2,$3::date,$4::date,$5,$6
+        )
+        RETURNING *
+      `, [
+        tenant_id,
+        report_type,
+        period_start,
+        period_end,
+        actor_id,
+        JSON.stringify(report_data)
+      ]);
+
+      const report = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.audit_report.generated",
+        object_id: report.report_id,
+        message: `Audit report generated: ${report.report_id}`,
+        tenant_id
+      });
+
+      return send(res, 201, {
+        audit_report: report
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/audit-reports") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT
+          report_id,
+          tenant_id,
+          report_type,
+          report_period_start,
+          report_period_end,
+          report_status,
+          generated_by,
+          generated_at,
+          created_at
+        FROM runtime_audit_reports
+        WHERE tenant_id = $1
+        ORDER BY generated_at DESC
+        LIMIT 100
+      `, [
+        tenant_id
+      ]);
+
+      return send(res, 200, {
+        audit_reports: result.rows
+      });
+    }
+
+    if (req.method === "GET" && path.startsWith("/runtime/audit-reports/")) {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const report_id = path.replace("/runtime/audit-reports/", "");
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_audit_reports
+        WHERE report_id = $1
+          AND tenant_id = $2
+        LIMIT 1
+      `, [
+        report_id,
+        tenant_id
+      ]);
+
+      if (result.rows.length === 0) {
+        return send(res, 404, {
+          error: "not_found",
+          message: "audit report not found"
+        });
+      }
+
+      return send(res, 200, {
+        audit_report: result.rows[0]
+      });
+    }
+
+    if (req.method === "GET" && path === "/runtime/defense/state") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "operator",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_defense_state
+        WHERE tenant_id = $1
+        ORDER BY updated_at DESC
+        LIMIT 100
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        defense_state: result.rows
+      });
+    }
+
+    if (req.method === "POST" && path === "/runtime/defense/state") {
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const body = await readBody(req);
+      const tenant_id = body.tenant_id || auth.user.tenant_id;
+
+      const result = await db.query(`
+        INSERT INTO runtime_defense_state (
+          tenant_id,
+          scope_type,
+          scope_id,
+          defense_mode,
+          defense_level,
+          current_risk_score,
+          current_confidence_score,
+          active_policy_flags,
+          active_risk_flags,
+          state_reason,
+          updated_by
+        )
+        VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+        )
+        ON CONFLICT (tenant_id, scope_type, scope_id)
+        DO UPDATE SET
+          defense_mode = EXCLUDED.defense_mode,
+          defense_level = EXCLUDED.defense_level,
+          current_risk_score = EXCLUDED.current_risk_score,
+          current_confidence_score = EXCLUDED.current_confidence_score,
+          active_policy_flags = EXCLUDED.active_policy_flags,
+          active_risk_flags = EXCLUDED.active_risk_flags,
+          state_reason = EXCLUDED.state_reason,
+          updated_by = EXCLUDED.updated_by,
+          updated_at = now()
+        RETURNING *
+      `, [
+        tenant_id,
+        body.scope_type || "tenant",
+        body.scope_id || tenant_id,
+        body.defense_mode || "normal",
+        body.defense_level || "standard",
+        body.current_risk_score || null,
+        body.current_confidence_score || null,
+        JSON.stringify(body.active_policy_flags || []),
+        JSON.stringify(body.active_risk_flags || []),
+        body.state_reason || "manual_defense_state_update",
+        auth.user.username || "system"
+      ]);
+
+      const defense_state = result.rows[0];
+
+      await writeEvent({
+        event_type: "runtime.defense.state.updated",
+        object_id: null,
+        message: `Defense state updated: ${defense_state.scope_type}/${defense_state.scope_id}`,
+        tenant_id
+      });
+
+      return send(res, 200, {
+        defense_state
+      });
+    }
+
+
+
+    // RSOS-076D Learning Runtime API - Create Learning State
+    if (req.method === "POST" && path === "/runtime/learning/states") {
+      const auth = requireRole(req, ["runtime_admin","governance","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const body = await readBody(req);
+
+      const tenant_id =
+        body.tenant_id && auth.user.scope === "global"
+          ? body.tenant_id
+          : auth.user.tenant_id;
+
+      if (!body.subject_id || !body.knowledge_id || !body.learning_stage) {
+        return send(res, 400, {
+          error: "missing_required_learning_state_fields",
+          required: ["subject_id","knowledge_id","learning_stage"]
+        });
+      }
+
+      const learning_state_id =
+        body.learning_state_id ||
+        "11111111-1111-4111-8111-" + Date.now().toString().slice(-12);
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const result = await db.query(`
+        INSERT INTO runtime_learning_states (
+          learning_state_id,
+          tenant_id,
+          subject_id,
+          knowledge_id,
+          learning_stage,
+          progress_percent,
+          confidence_score,
+          started_at,
+          updated_at,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,NOW()),NOW(),$9)
+        RETURNING *
+      `, [
+        learning_state_id,
+        tenant_id,
+        body.subject_id,
+        body.knowledge_id,
+        body.learning_stage,
+        body.progress_percent || 0,
+        body.confidence_score || 0,
+        body.started_at || null,
+        created_by
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.learning.state.created",
+        object_id: learning_state_id,
+        tenant_id,
+        message: "Learning state created: " + body.learning_stage
+      });
+
+      return send(res, 200, {
+        created: true,
+        learning_state: result.rows[0]
+      });
+    }
+
+    // RSOS-076D Learning Runtime API - List Learning States
+    if (req.method === "GET" && path === "/runtime/learning/states") {
+      const auth = requireRole(req, ["runtime_admin","governance","auditor","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const urlObj = new URL(req.url, "http://localhost");
+
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && auth.user.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : auth.user.tenant_id;
+
+      const subject_id = urlObj.searchParams.get("subject_id");
+      const knowledge_id = urlObj.searchParams.get("knowledge_id");
+      const learning_stage = urlObj.searchParams.get("learning_stage");
+
+      const params = [tenant_id];
+      let where = "WHERE tenant_id = $1";
+
+      if (subject_id) {
+        params.push(subject_id);
+        where += " AND subject_id = $" + params.length;
+      }
+
+      if (knowledge_id) {
+        params.push(knowledge_id);
+        where += " AND knowledge_id = $" + params.length;
+      }
+
+      if (learning_stage) {
+        params.push(learning_stage);
+        where += " AND learning_stage = $" + params.length;
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_learning_states
+        ${where}
+        ORDER BY created_at DESC
+      `, params);
+
+      return send(res, 200, {
+        tenant_id,
+        count: result.rows.length,
+        items: result.rows
+      });
+    }
+
+    // RSOS-076D Assessment Runtime API - Create Assessment
+    if (req.method === "POST" && path === "/runtime/assessments") {
+      const auth = requireRole(req, ["runtime_admin","governance","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const body = await readBody(req);
+
+      const tenant_id =
+        body.tenant_id && auth.user.scope === "global"
+          ? body.tenant_id
+          : auth.user.tenant_id;
+
+      if (!body.title || !body.assessment_type) {
+        return send(res, 400, {
+          error: "missing_required_assessment_fields",
+          required: ["title","assessment_type"]
+        });
+      }
+
+      const assessment_id =
+        body.assessment_id ||
+        "22222222-2222-4222-8222-" + Date.now().toString().slice(-12);
+
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      const result = await db.query(`
+        INSERT INTO runtime_assessments (
+          assessment_id,
+          tenant_id,
+          title,
+          assessment_type,
+          competence_id,
+          qualification_id,
+          passing_score,
+          created_by
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING *
+      `, [
+        assessment_id,
+        tenant_id,
+        body.title,
+        body.assessment_type,
+        body.competence_id || null,
+        body.qualification_id || null,
+        body.passing_score || null,
+        created_by
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.assessment.created",
+        object_id: assessment_id,
+        tenant_id,
+        message: "Assessment created: " + body.title
+      });
+
+      return send(res, 200, {
+        created: true,
+        assessment: result.rows[0]
+      });
+    }
+
+    // RSOS-076D Assessment Runtime API - List Assessments
+    if (req.method === "GET" && path === "/runtime/assessments") {
+      const auth = requireRole(req, ["runtime_admin","governance","auditor","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const urlObj = new URL(req.url, "http://localhost");
+
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && auth.user.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : auth.user.tenant_id;
+
+      const assessment_type = urlObj.searchParams.get("assessment_type");
+      const competence_id = urlObj.searchParams.get("competence_id");
+      const qualification_id = urlObj.searchParams.get("qualification_id");
+
+      const params = [tenant_id];
+      let where = "WHERE tenant_id = $1";
+
+      if (assessment_type) {
+        params.push(assessment_type);
+        where += " AND assessment_type = $" + params.length;
+      }
+
+      if (competence_id) {
+        params.push(competence_id);
+        where += " AND competence_id = $" + params.length;
+      }
+
+      if (qualification_id) {
+        params.push(qualification_id);
+        where += " AND qualification_id = $" + params.length;
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_assessments
+        ${where}
+        ORDER BY created_at DESC
+      `, params);
+
+      return send(res, 200, {
+        tenant_id,
+        count: result.rows.length,
+        items: result.rows
+      });
+    }
+
+    // RSOS-076D Learning Runtime Dashboard
+    if (req.method === "GET" && path === "/runtime/learning/runtime-dashboard") {
+      const auth = requireRole(req, ["runtime_admin","governance","auditor","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const urlObj = new URL(req.url, "http://localhost");
+
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && auth.user.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : auth.user.tenant_id;
+
+      const learningResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS learning_states,
+          COALESCE(AVG(progress_percent),0)::numeric(5,2) AS avg_progress,
+          COALESCE(AVG(confidence_score),0)::numeric(5,2) AS avg_learning_confidence,
+          COUNT(*) FILTER (WHERE learning_stage = 'INTEREST')::int AS interest_count,
+          COUNT(*) FILTER (WHERE learning_stage = 'PERCEPTION')::int AS perception_count,
+          COUNT(*) FILTER (WHERE learning_stage = 'ORIENTATION')::int AS orientation_count,
+          COUNT(*) FILTER (WHERE learning_stage = 'UNDERSTANDING')::int AS understanding_count,
+          COUNT(*) FILTER (WHERE learning_stage = 'APPLICATION')::int AS application_count,
+          COUNT(*) FILTER (WHERE learning_stage = 'VERIFICATION')::int AS verification_count,
+          COUNT(*) FILTER (WHERE learning_stage = 'COMPETENCE')::int AS competence_count
+        FROM runtime_learning_states
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      const competenceResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS competence_states,
+          COALESCE(AVG(competence_level),0)::numeric(5,2) AS avg_competence_level,
+          COALESCE(AVG(confidence_score),0)::numeric(5,2) AS avg_competence_confidence,
+          COUNT(*) FILTER (WHERE verified = true)::int AS verified_competencies
+        FROM runtime_competence_states
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      const gapResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS competence_gaps,
+          COALESCE(AVG(gap_score),0)::numeric(5,2) AS avg_gap_score,
+          COUNT(*) FILTER (WHERE gap_score >= 3)::int AS critical_gaps
+        FROM runtime_competence_gaps
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      const assessmentResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS assessments,
+          COUNT(*) FILTER (WHERE assessment_type = 'KNOWLEDGE_TEST')::int AS knowledge_tests,
+          COUNT(*) FILTER (WHERE assessment_type = 'PRACTICAL')::int AS practical_assessments,
+          COUNT(*) FILTER (WHERE assessment_type = 'OBSERVATION')::int AS observation_assessments
+        FROM runtime_assessments
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      const attemptResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS assessment_attempts,
+          COUNT(*) FILTER (WHERE result = 'PASSED')::int AS passed_attempts,
+          COUNT(*) FILTER (WHERE result = 'FAILED')::int AS failed_attempts,
+          COUNT(*) FILTER (WHERE verified = true)::int AS verified_attempts,
+          COALESCE(AVG(score),0)::numeric(5,2) AS avg_score
+        FROM runtime_assessment_attempts
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      const recommendationResult = await db.query(`
+        SELECT
+          COUNT(*)::int AS total_recommendations,
+          COUNT(*) FILTER (WHERE status = 'OPEN')::int AS open_recommendations,
+          COUNT(*) FILTER (WHERE status <> 'OPEN')::int AS closed_recommendations,
+          COALESCE(AVG(confidence_score),0)::numeric(5,2) AS avg_recommendation_confidence
+        FROM runtime_learning_recommendations
+        WHERE tenant_id = $1
+      `, [tenant_id]);
+
+      return send(res, 200, {
+        tenant_id,
+        learning: learningResult.rows[0],
+        competence: competenceResult.rows[0],
+        gaps: gapResult.rows[0],
+        assessments: assessmentResult.rows[0],
+        attempts: attemptResult.rows[0],
+        recommendations: recommendationResult.rows[0]
+      });
+    }
+
+    // RSOS-076E Assessment Attempts Runtime API - Create Attempt
+    if (req.method === "POST" && path === "/runtime/assessment-attempts") {
+      const auth = requireRole(req, ["runtime_admin","governance","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const body = await readBody(req);
+
+      const tenant_id =
+        body.tenant_id && auth.user.scope === "global"
+          ? body.tenant_id
+          : auth.user.tenant_id;
+
+      if (!body.assessment_id || !body.subject_id) {
+        return send(res, 400, {
+          error: "missing_required_assessment_attempt_fields",
+          required: ["assessment_id","subject_id"]
+        });
+      }
+
+      const attempt_id =
+        body.attempt_id ||
+        "33333333-3333-4333-8333-" + Date.now().toString().slice(-12);
+
+      const result = await db.query(`
+        INSERT INTO runtime_assessment_attempts (
+          attempt_id,
+          tenant_id,
+          assessment_id,
+          subject_id,
+          score,
+          result,
+          started_at,
+          completed_at,
+          verified
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,NOW()),COALESCE($8,NOW()),$9)
+        RETURNING *
+      `, [
+        attempt_id,
+        tenant_id,
+        body.assessment_id,
+        body.subject_id,
+        body.score || null,
+        body.result || null,
+        body.started_at || null,
+        body.completed_at || null,
+        body.verified === true
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.assessment.attempt.created",
+        object_id: attempt_id,
+        tenant_id,
+        message: "Assessment attempt created"
+      });
+
+      return send(res, 200, {
+        created: true,
+        assessment_attempt: result.rows[0]
+      });
+    }
+
+    // RSOS-076E Assessment Attempts Runtime API - List Attempts
+    if (req.method === "GET" && path === "/runtime/assessment-attempts") {
+      const auth = requireRole(req, ["runtime_admin","governance","auditor","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const urlObj = new URL(req.url, "http://localhost");
+
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && auth.user.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : auth.user.tenant_id;
+
+      const assessment_id = urlObj.searchParams.get("assessment_id");
+      const subject_id = urlObj.searchParams.get("subject_id");
+      const result_filter = urlObj.searchParams.get("result");
+      const verified = urlObj.searchParams.get("verified");
+
+      const params = [tenant_id];
+      let where = "WHERE tenant_id = $1";
+
+      if (assessment_id) {
+        params.push(assessment_id);
+        where += " AND assessment_id = $" + params.length;
+      }
+
+      if (subject_id) {
+        params.push(subject_id);
+        where += " AND subject_id = $" + params.length;
+      }
+
+      if (result_filter) {
+        params.push(result_filter);
+        where += " AND result = $" + params.length;
+      }
+
+      if (verified === "true" || verified === "false") {
+        params.push(verified === "true");
+        where += " AND verified = $" + params.length;
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_assessment_attempts
+        ${where}
+        ORDER BY created_at DESC
+      `, params);
+
+      return send(res, 200, {
+        tenant_id,
+        count: result.rows.length,
+        items: result.rows
+      });
+    }
+
+    // RSOS-076F Competence State Generator
+    if (req.method === "POST" && path === "/runtime/competence/calculate-from-attempts") {
+      const auth = requireRole(req, ["runtime_admin","governance","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const body = await readBody(req);
+
+      const tenant_id =
+        body.tenant_id && auth.user.scope === "global"
+          ? body.tenant_id
+          : auth.user.tenant_id;
+
+      const subject_id = body.subject_id || null;
+      const competence_id = body.competence_id || null;
+
+      const params = [tenant_id];
+      let where = "WHERE aa.tenant_id = $1 AND aa.result = 'PASSED' AND aa.verified = true";
+
+      if (subject_id) {
+        params.push(subject_id);
+        where += " AND aa.subject_id = $" + params.length;
+      }
+
+      if (competence_id) {
+        params.push(competence_id);
+        where += " AND a.competence_id = $" + params.length;
+      }
+
+      const attemptResult = await db.query(`
+        SELECT
+          aa.subject_id,
+          a.competence_id,
+          COUNT(*)::int AS evidence_count,
+          COALESCE(AVG(aa.score),0)::numeric(5,2) AS avg_score,
+          MAX(aa.completed_at) AS last_verified_at
+        FROM runtime_assessment_attempts aa
+        JOIN runtime_assessments a
+          ON a.assessment_id::text = aa.assessment_id
+         AND a.tenant_id = aa.tenant_id
+        ${where}
+          AND a.competence_id IS NOT NULL
+        GROUP BY aa.subject_id, a.competence_id
+        ORDER BY aa.subject_id, a.competence_id
+      `, params);
+
+      const updated = [];
+
+      for (const row of attemptResult.rows) {
+        let competence_level = 5;
+        if (Number(row.avg_score) >= 95) competence_level = 7;
+        else if (Number(row.avg_score) >= 90) competence_level = 6;
+        else if (Number(row.avg_score) >= 80) competence_level = 5;
+        else if (Number(row.avg_score) >= 70) competence_level = 4;
+
+        const confidence_score = Math.min(
+          95,
+          Math.round(Number(row.avg_score) * 0.7 + Number(row.evidence_count) * 10)
+        );
+
+        const competence_state_id =
+          "44444444-4444-4444-8444-" +
+          Date.now().toString().slice(-12);
+
+        const upsertResult = await db.query(`
+          INSERT INTO runtime_competence_states (
+            competence_state_id,
+            tenant_id,
+            subject_id,
+            competence_id,
+            competence_level,
+            confidence_score,
+            evidence_count,
+            gap_score,
+            verified,
+            updated_at
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,$7,0,true,NOW())
+          ON CONFLICT (competence_state_id)
+          DO UPDATE SET
+            competence_level = EXCLUDED.competence_level,
+            confidence_score = EXCLUDED.confidence_score,
+            evidence_count = EXCLUDED.evidence_count,
+            gap_score = EXCLUDED.gap_score,
+            verified = EXCLUDED.verified,
+            updated_at = NOW()
+          RETURNING *
+        `, [
+          competence_state_id,
+          tenant_id,
+          row.subject_id,
+          row.competence_id,
+          competence_level,
+          confidence_score,
+          row.evidence_count
+        ]);
+
+        updated.push(upsertResult.rows[0]);
+      }
+
+      await writeEvent({
+        event_type: "runtime.competence.calculated_from_attempts",
+        tenant_id,
+        message: "Calculated competence states from verified assessment attempts: " + updated.length
+      });
+
+      return send(res, 200, {
+        tenant_id,
+        calculated: updated.length,
+        items: updated
+      });
+    }
+
+    // RSOS-076F Competence State API - List States
+    if (req.method === "GET" && path === "/runtime/competence/states") {
+      const auth = requireRole(req, ["runtime_admin","governance","auditor","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const urlObj = new URL(req.url, "http://localhost");
+
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && auth.user.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : auth.user.tenant_id;
+
+      const subject_id = urlObj.searchParams.get("subject_id");
+      const competence_id = urlObj.searchParams.get("competence_id");
+      const verified = urlObj.searchParams.get("verified");
+
+      const params = [tenant_id];
+      let where = "WHERE tenant_id = $1";
+
+      if (subject_id) {
+        params.push(subject_id);
+        where += " AND subject_id = $" + params.length;
+      }
+
+      if (competence_id) {
+        params.push(competence_id);
+        where += " AND competence_id = $" + params.length;
+      }
+
+      if (verified === "true" || verified === "false") {
+        params.push(verified === "true");
+        where += " AND verified = $" + params.length;
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_competence_states
+        ${where}
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC
+      `, params);
+
+      return send(res, 200, {
+        tenant_id,
+        count: result.rows.length,
+        items: result.rows
+      });
+    }
+
+    // RSOS-076G Competence Gap Runtime - Calculate Gaps
+    if (req.method === "POST" && path === "/runtime/competence/gaps/calculate") {
+      const auth = requireRole(req, ["runtime_admin","governance","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const body = await readBody(req);
+
+      const tenant_id =
+        body.tenant_id && auth.user.scope === "global"
+          ? body.tenant_id
+          : auth.user.tenant_id;
+
+      if (!body.subject_id || !body.competence_id || body.required_level === undefined) {
+        return send(res, 400, {
+          error: "missing_required_gap_fields",
+          required: ["subject_id","competence_id","required_level"]
+        });
+      }
+
+      const stateResult = await db.query(`
+        SELECT *
+        FROM runtime_competence_states
+        WHERE tenant_id = $1
+          AND subject_id = $2
+          AND competence_id = $3
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+      `, [
+        tenant_id,
+        body.subject_id,
+        body.competence_id
+      ]);
+
+      const actual_level =
+        stateResult.rows.length > 0
+          ? Number(stateResult.rows[0].competence_level || 0)
+          : 0;
+
+      const required_level = Number(body.required_level);
+      const gap_score = Math.max(0, required_level - actual_level);
+
+      await db.query(`
+        DELETE FROM runtime_competence_gaps
+        WHERE tenant_id = $1
+          AND subject_id = $2
+          AND competence_id = $3
+      `, [
+        tenant_id,
+        body.subject_id,
+        body.competence_id
+      ]);
+
+      const gap_id =
+        body.gap_id ||
+        "55555555-5555-4555-8555-" + Date.now().toString().slice(-12);
+
+      const insertResult = await db.query(`
+        INSERT INTO runtime_competence_gaps (
+          gap_id,
+          tenant_id,
+          subject_id,
+          competence_id,
+          required_level,
+          actual_level,
+          gap_score
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        RETURNING *
+      `, [
+        gap_id,
+        tenant_id,
+        body.subject_id,
+        body.competence_id,
+        required_level,
+        actual_level,
+        gap_score
+      ]);
+
+      await writeEvent({
+        event_type: "runtime.competence.gap.calculated",
+        object_id: gap_id,
+        tenant_id,
+        message: "Competence gap calculated: " + gap_score
+      });
+
+      return send(res, 200, {
+        calculated: true,
+        gap: insertResult.rows[0]
+      });
+    }
+
+    // RSOS-076G Competence Gap Runtime - List Gaps
+    if (req.method === "GET" && path === "/runtime/competence/gaps") {
+      const auth = requireRole(req, ["runtime_admin","governance","auditor","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const urlObj = new URL(req.url, "http://localhost");
+
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && auth.user.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : auth.user.tenant_id;
+
+      const subject_id = urlObj.searchParams.get("subject_id");
+      const competence_id = urlObj.searchParams.get("competence_id");
+
+      const params = [tenant_id];
+      let where = "WHERE tenant_id = $1";
+
+      if (subject_id) {
+        params.push(subject_id);
+        where += " AND subject_id = $" + params.length;
+      }
+
+      if (competence_id) {
+        params.push(competence_id);
+        where += " AND competence_id = $" + params.length;
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_competence_gaps
+        ${where}
+        ORDER BY created_at DESC
+      `, params);
+
+      return send(res, 200, {
+        tenant_id,
+        count: result.rows.length,
+        items: result.rows
+      });
+    }
+
+    // RSOS-076H Learning Recommendation Generator
+    if (req.method === "POST" && path === "/runtime/learning/recommendations/generate") {
+      const auth = requireRole(req, ["runtime_admin","governance","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const body = await readBody(req);
+
+      const tenant_id =
+        body.tenant_id && auth.user.scope === "global"
+          ? body.tenant_id
+          : auth.user.tenant_id;
+
+      const params = [tenant_id];
+      let where = "WHERE tenant_id = $1";
+
+      if (body.subject_id) {
+        params.push(body.subject_id);
+        where += " AND subject_id = $" + params.length;
+      }
+
+      if (body.competence_id) {
+        params.push(body.competence_id);
+        where += " AND competence_id = $" + params.length;
+      }
+
+      const gapsResult = await db.query(`
+        SELECT *
+        FROM runtime_competence_gaps
+        ${where}
+        ORDER BY gap_score DESC, created_at DESC
+      `, params);
+
+      const generated = [];
+
+      for (const gap of gapsResult.rows) {
+        const gapScore = Number(gap.gap_score || 0);
+
+        let recommendation_type = "LEARNING_REINFORCEMENT";
+        let recommendation_text = "Gezielte Wiederholung und Vertiefung empfohlen.";
+
+        if (gapScore >= 5) {
+          recommendation_type = "FULL_LEARNING_PATH_REQUIRED";
+          recommendation_text = "Vollständiger Lernpfad erforderlich, inklusive Grundlagenaufbau, Anwendung und erneuter Verifikation.";
+        } else if (gapScore >= 3) {
+          recommendation_type = "INTENSIVE_TRAINING_REQUIRED";
+          recommendation_text = "Intensives Training empfohlen, anschließend erneutes Assessment und Mentor-Review.";
+        } else if (gapScore >= 1) {
+          recommendation_type = "TARGETED_REINFORCEMENT";
+          recommendation_text = "Gezielte Vertiefung empfohlen, um die Kompetenzlücke zu schließen.";
+        } else {
+          recommendation_type = "MAINTAIN_COMPETENCE";
+          recommendation_text = "Keine akute Lücke. Kompetenz durch Wiederholung und Praxisnachweise stabil halten.";
+        }
+
+        const recommendation_id =
+          "66666666-6666-4666-8666-" + Date.now().toString().slice(-12);
+
+        const confidence_score =
+          gapScore >= 5 ? 90 :
+          gapScore >= 3 ? 80 :
+          gapScore >= 1 ? 70 : 60;
+
+        const insertResult = await db.query(`
+          INSERT INTO runtime_learning_recommendations (
+            recommendation_id,
+            tenant_id,
+            subject_id,
+            recommendation_type,
+            recommendation_text,
+            confidence_score,
+            status
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,'OPEN')
+          RETURNING *
+        `, [
+          recommendation_id,
+          tenant_id,
+          gap.subject_id,
+          recommendation_type,
+          recommendation_text,
+          confidence_score
+        ]);
+
+        generated.push(insertResult.rows[0]);
+      }
+
+      await writeEvent({
+        event_type: "runtime.learning.recommendations.generated",
+        tenant_id,
+        message: "Generated learning recommendations from competence gaps: " + generated.length
+      });
+
+      return send(res, 200, {
+        tenant_id,
+        generated: generated.length,
+        items: generated
+      });
+    }
+
+    // RSOS-076H Learning Recommendation API - List
+    if (req.method === "GET" && path === "/runtime/learning/recommendations") {
+      const auth = requireRole(req, ["runtime_admin","governance","auditor","system_admin"]);
+      if (!auth.allowed) return send(res, auth.code, auth.response);
+
+      const urlObj = new URL(req.url, "http://localhost");
+
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && auth.user.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : auth.user.tenant_id;
+
+      const subject_id = urlObj.searchParams.get("subject_id");
+      const status = urlObj.searchParams.get("status");
+
+      const params = [tenant_id];
+      let where = "WHERE tenant_id = $1";
+
+      if (subject_id) {
+        params.push(subject_id);
+        where += " AND subject_id = $" + params.length;
+      }
+
+      if (status) {
+        params.push(status);
+        where += " AND status = $" + params.length;
+      }
+
+      const result = await db.query(`
+        SELECT *
+        FROM runtime_learning_recommendations
+        ${where}
+        ORDER BY created_at DESC
+      `, params);
+
+      return send(res, 200, {
+        tenant_id,
+        count: result.rows.length,
+        items: result.rows
+      });
+    }
   } catch (err) {
     console.error(err);
 
@@ -12582,6 +17096,8 @@ async function updateWorkflowState(
 
 initDb()
   .then(() => {
+
+
 
     server.listen(8080, () => {
 
