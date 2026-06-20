@@ -9712,7 +9712,83 @@ if (req.method === "POST" && path === "/runtime/execute") {
         gate_id
       ]);
 
-      const finalGate = gateUpdateResult.rows[0] || insertResult.rows[0];
+      const updatedGate = gateUpdateResult.rows[0] || insertResult.rows[0];
+
+      let final_gate_status = updatedGate.gate_status;
+      let final_gate_result = updatedGate.gate_result;
+      let final_gate_reason = updatedGate.gate_reason;
+
+      if (updatedGate.governance_result === "rejected") {
+        final_gate_status = "blocked";
+        final_gate_result = "blocked_by_governance";
+        final_gate_reason = "Recommendation blocked because latest governance decision rejected it.";
+      } else if (updatedGate.risk_result === "acute_risk") {
+        final_gate_status = "blocked";
+        final_gate_result = "blocked_by_acute_risk";
+        final_gate_reason = "Recommendation blocked because acute risk is present.";
+      } else if (updatedGate.unknown_result === "open_unknowns") {
+        final_gate_status = "review_required";
+        final_gate_result = "review_required_unknowns";
+        final_gate_reason = "Recommendation requires review because open unknowns exist.";
+      } else if (updatedGate.risk_result === "high_risk") {
+        final_gate_status = "review_required";
+        final_gate_result = "review_required_high_risk";
+        final_gate_reason = "Recommendation requires review because high residual risk exists.";
+      } else if (
+        updatedGate.evidence_result === "available" &&
+        updatedGate.source_result === "available" &&
+        updatedGate.hypothesis_result === "available" &&
+        updatedGate.verification_result === "available" &&
+        updatedGate.unknown_result === "clear" &&
+        (updatedGate.risk_result === "clear" || updatedGate.risk_result === "risk_present") &&
+        updatedGate.governance_result === "approved"
+      ) {
+        final_gate_status = "verified";
+        final_gate_result = "verified";
+        final_gate_reason = "Recommendation verified: evidence, source, hypothesis, verification, risk and governance checks passed.";
+      }
+
+      const finalGateResult = await db.query(`
+        UPDATE runtime_recommendation_verification_gates
+        SET
+          gate_status = $1::text,
+          gate_result = $2::text,
+          gate_reason = $3::text,
+          gate_payload = gate_payload || jsonb_build_object(
+            'decision_engine_applied', true,
+            'decision_engine_applied_at', now(),
+            'previous_gate_status', $4::text,
+            'previous_gate_result', $5::text
+          )
+        WHERE tenant_id = $6::text
+          AND gate_id = $7::text
+        RETURNING *
+      `, [
+        final_gate_status,
+        final_gate_result,
+        final_gate_reason,
+        updatedGate.gate_status,
+        updatedGate.gate_result,
+        tenant_id,
+        gate_id
+      ]);
+
+      const finalGate = finalGateResult.rows[0] || updatedGate;
+
+      await writeEvent({
+        tenant_id,
+        object_id: recommendation.object_id,
+        event_type: "runtime.recommendation.verification_gate.decision_applied",
+        message: JSON.stringify({
+          gate_id,
+          recommendation_id,
+          previous_gate_status: updatedGate.gate_status,
+          previous_gate_result: updatedGate.gate_result,
+          gate_status: finalGate.gate_status,
+          gate_result: finalGate.gate_result,
+          gate_reason: finalGate.gate_reason
+        })
+      });
 
       await writeEvent({
         tenant_id,
@@ -9743,7 +9819,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
       });
 
       return send(res, 200, {
-        verified: gate_status === "verified",
+        verified: finalGate.gate_status === "verified",
         gate_created: true,
         gate: finalGate
       });
