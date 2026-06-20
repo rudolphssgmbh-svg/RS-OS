@@ -634,6 +634,66 @@ async function generateRecommendationsForObject({
     return false;
   }
 
+  function mapPriorityToScore(priority) {
+    if (priority === "critical") return 100;
+    if (priority === "high") return 80;
+    if (priority === "normal") return 60;
+    if (priority === "low") return 40;
+    return 60;
+  }
+
+  function mapScoreToPriority(score) {
+    if (score >= 90) return "critical";
+    if (score >= 70) return "high";
+    if (score >= 45) return "normal";
+    return "low";
+  }
+
+  function calculateRecommendationConfidence(rule, definition, context) {
+    const factors = [];
+
+    let confidenceScore = 70;
+
+    if (definition.confidence_score !== undefined) {
+      confidenceScore = Number(definition.confidence_score);
+      factors.push("definition_confidence_score");
+    } else {
+      factors.push("default_confidence_score");
+    }
+
+    if (context.risk_score >= 70) {
+      confidenceScore += 10;
+      factors.push("high_risk_score");
+    }
+
+    if (context.open_high_actions > 0) {
+      confidenceScore += 10;
+      factors.push("open_high_priority_actions");
+    }
+
+    if (context.governance_review_without_approval === true) {
+      confidenceScore += 10;
+      factors.push("governance_review_without_approval");
+    }
+
+    if (context.competency_gap > 0) {
+      confidenceScore += 5;
+      factors.push("competency_gap_detected");
+    }
+
+    confidenceScore = Math.max(0, Math.min(100, Math.round(confidenceScore)));
+
+    let confidenceLevel = "medium";
+    if (confidenceScore >= 85) confidenceLevel = "high";
+    if (confidenceScore < 50) confidenceLevel = "low";
+
+    return {
+      confidence_score: confidenceScore,
+      confidence_level: confidenceLevel,
+      confidence_factors: factors
+    };
+  }
+
   for (const rule of rulesResult.rows) {
     const condition = rule.condition_definition || {};
     const definition = rule.recommendation_definition || {};
@@ -643,14 +703,25 @@ async function generateRecommendationsForObject({
     }
 
     const recommendation_type = definition.recommendation_type;
-    const priority = definition.priority || "normal";
+    const base_priority = definition.priority || "normal";
+
+    const confidence = calculateRecommendationConfidence(rule, definition, context);
+    const basePriorityScore = mapPriorityToScore(base_priority);
+    const effectivePriorityScore = Math.round((basePriorityScore * 0.7) + (confidence.confidence_score * 0.3));
+    const effective_priority = mapScoreToPriority(effectivePriorityScore);
 
     let reason = `Rule matched: ${rule.rule_name}`;
     let evidence = {
       rule_id: rule.rule_id,
       rule_name: rule.rule_name,
       condition,
-      context
+      context,
+      confidence_score: confidence.confidence_score,
+      confidence_level: confidence.confidence_level,
+      confidence_factors: confidence.confidence_factors,
+      base_priority,
+      effective_priority,
+      effective_priority_score: effectivePriorityScore
     };
 
     if (recommendation_type === "RECHECK_GOVERNANCE") {
@@ -693,7 +764,13 @@ async function generateRecommendationsForObject({
 
     recommendations.push({
       recommendation_type,
-      priority,
+      priority: effective_priority,
+      base_priority,
+      confidence_score: confidence.confidence_score,
+      confidence_level: confidence.confidence_level,
+      confidence_factors: confidence.confidence_factors,
+      effective_priority,
+      effective_priority_score: effectivePriorityScore,
       reason,
       evidence
     });
