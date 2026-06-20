@@ -9188,6 +9188,219 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
 
 
+    // RECORD RUNTIME RECOMMENDATION FEEDBACK
+    // RSOS-062D recommendation outcome learning
+
+    if (req.method === "POST" && path.startsWith("/runtime/recommendations/feedback/")) {
+
+      const auth = requireRole(req, [
+        "system_admin",
+        "runtime_admin",
+        "governance",
+        "auditor"
+      ]);
+
+      if (!auth.allowed) {
+        return send(res, auth.code, auth.response);
+      }
+
+      const tenant_id = auth.user.tenant_id;
+
+      const recommendation_id = decodeURIComponent(
+        path.replace("/runtime/recommendations/feedback/", "")
+      );
+
+      if (!recommendation_id) {
+        return send(res, 400, {
+          error: "missing_recommendation_id"
+        });
+      }
+
+      const body = await readBody(req);
+      const outcome = body.outcome || null;
+      const feedback_reason = body.feedback_reason || null;
+      const created_by =
+        auth.user.operator_id || auth.user.username || "runtime_admin";
+
+      if (!["success", "failure"].includes(outcome)) {
+        return send(res, 400, {
+          error: "validation_error",
+          message: "outcome must be success or failure"
+        });
+      }
+
+      const recommendationResult = await db.query(`
+        SELECT *
+        FROM runtime_recommendations
+        WHERE tenant_id = $1
+          AND recommendation_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        recommendation_id
+      ]);
+
+      if (recommendationResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "recommendation_not_found",
+          recommendation_id
+        });
+      }
+
+      const recommendation = recommendationResult.rows[0];
+      const evidence = recommendation.evidence || {};
+      const rule_id = evidence.rule_id || null;
+
+      if (!rule_id) {
+        return send(res, 409, {
+          error: "recommendation_has_no_rule_id",
+          recommendation_id
+        });
+      }
+
+      const ruleResult = await db.query(`
+        SELECT
+          rule_id,
+          rule_name,
+          success_count,
+          failure_count,
+          feedback_count,
+          confidence_score
+        FROM runtime_recommendation_rules
+        WHERE tenant_id = $1
+          AND rule_id = $2
+        LIMIT 1
+      `, [
+        tenant_id,
+        rule_id
+      ]);
+
+      if (ruleResult.rows.length === 0) {
+        return send(res, 404, {
+          error: "recommendation_rule_not_found",
+          recommendation_id,
+          rule_id
+        });
+      }
+
+      const rule = ruleResult.rows[0];
+
+      const success_count_before = Number(rule.success_count || 0);
+      const failure_count_before = Number(rule.failure_count || 0);
+      const feedback_count_before = Number(rule.feedback_count || 0);
+      const confidence_score_before = Number(rule.confidence_score || 50);
+
+      const success_count_after =
+        outcome === "success"
+          ? success_count_before + 1
+          : success_count_before;
+
+      const failure_count_after =
+        outcome === "failure"
+          ? failure_count_before + 1
+          : failure_count_before;
+
+      const feedback_count_after = feedback_count_before + 1;
+
+      const total = success_count_after + failure_count_after;
+
+      let confidence_score_after =
+        total > 0
+          ? (success_count_after / total) * 100
+          : confidence_score_before;
+
+      confidence_score_after =
+        Math.max(0, Math.min(100, Math.round(confidence_score_after * 100) / 100));
+
+      const updateRuleResult = await db.query(`
+        UPDATE runtime_recommendation_rules
+        SET
+          success_count = $1,
+          failure_count = $2,
+          feedback_count = $3,
+          confidence_score = $4,
+          last_feedback_at = now(),
+          updated_by = $5,
+          updated_at = now()
+        WHERE tenant_id = $6
+          AND rule_id = $7
+        RETURNING *
+      `, [
+        success_count_after,
+        failure_count_after,
+        feedback_count_after,
+        confidence_score_after,
+        created_by,
+        tenant_id,
+        rule_id
+      ]);
+
+      const updatedRule = updateRuleResult.rows[0];
+
+      const updatedEvidence = {
+        ...(recommendation.evidence || {}),
+        latest_feedback: {
+          outcome,
+          feedback_reason,
+          confidence_score_before,
+          confidence_score_after,
+          success_count_before,
+          success_count_after,
+          failure_count_before,
+          failure_count_after,
+          feedback_count_before,
+          feedback_count_after,
+          recorded_by: created_by,
+          recorded_at: new Date().toISOString()
+        }
+      };
+
+      const updateRecommendationResult = await db.query(`
+        UPDATE runtime_recommendations
+        SET
+          evidence = $1
+        WHERE tenant_id = $2
+          AND recommendation_id = $3
+        RETURNING *
+      `, [
+        JSON.stringify(updatedEvidence),
+        tenant_id,
+        recommendation_id
+      ]);
+
+      const updatedRecommendation = updateRecommendationResult.rows[0];
+
+      await writeEvent({
+        tenant_id,
+        object_id: recommendation.object_id,
+        event_type: "runtime.recommendation.feedback.recorded",
+        message: JSON.stringify({
+          recommendation_id,
+          rule_id,
+          outcome,
+          confidence_score_before,
+          confidence_score_after,
+          success_count_before,
+          success_count_after,
+          failure_count_before,
+          failure_count_after,
+          feedback_count_before,
+          feedback_count_after
+        })
+      });
+
+      return send(res, 200, {
+        feedback_recorded: true,
+        recommendation_id,
+        rule_id,
+        outcome,
+        confidence_score_before,
+        confidence_score_after,
+        rule: updatedRule,
+        recommendation: updatedRecommendation
+      });
+    }
+
     // EXECUTE APPROVED RUNTIME RECOMMENDATION
 
     if (req.method === "POST" && path.startsWith("/runtime/recommendations/execute/")) {
