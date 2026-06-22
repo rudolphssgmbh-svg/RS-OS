@@ -29,7 +29,7 @@ async function handleRsos060WitnessObservationsRoutes(ctx) {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const witness_type = body.witness_type;
       const name = body.name;
       const role = body.role || null;
@@ -156,7 +156,7 @@ async function handleRsos060WitnessObservationsRoutes(ctx) {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const witness_id = body.witness_id || null;
       const evidence_id = body.evidence_id || null;
       const observation_text = body.observation_text;

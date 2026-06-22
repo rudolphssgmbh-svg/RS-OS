@@ -29,7 +29,7 @@ async function handleRsos060SourcesRoutes(ctx) {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const source_type = body.source_type;
       const title = body.title || null;
       const description = body.description || null;

@@ -29,7 +29,7 @@ async function handleRsos060AssumptionsHypothesesRoutes(ctx) {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const evidence_id = body.evidence_id || null;
       const assumption_text = body.assumption_text;
       const confidence = body.confidence || null;
@@ -158,7 +158,7 @@ async function handleRsos060AssumptionsHypothesesRoutes(ctx) {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const assumption_id = body.assumption_id || null;
       const hypothesis_text = body.hypothesis_text;
       const confidence = body.confidence || null;

@@ -30,7 +30,7 @@ async function handleRsos060EvidenceRoutes(ctx) {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const evidence_type = body.evidence_type;
       const title = body.title || null;
       const evidence_text = body.evidence_text || null;

@@ -48,7 +48,7 @@ async function handleRsos060VerificationsRoutes(ctx) {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const hypothesis_id = body.hypothesis_id || null;
       const verification_method = body.verification_method;
       const verification_notes = body.verification_notes || null;
@@ -177,7 +177,7 @@ async function handleRsos060VerificationsRoutes(ctx) {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const verification_id = body.verification_id || null;
       const result_status = body.result_status;
       const confidence = body.confidence || null;
