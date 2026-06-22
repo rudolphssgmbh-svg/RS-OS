@@ -2676,7 +2676,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -2821,7 +2821,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const report_id = urlObj.searchParams.get("report_id");
 
       if (!tenant_id) {
@@ -2926,7 +2926,7 @@ const server = http.createServer(async (req, res) => {
       if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       const result = await db.query(`
         SELECT *
@@ -3075,7 +3075,7 @@ const server = http.createServer(async (req, res) => {
       if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const outcome_id = urlObj.searchParams.get("outcome_id");
 
       let query = `
@@ -3238,7 +3238,7 @@ const server = http.createServer(async (req, res) => {
       if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const outcome_id = urlObj.searchParams.get("outcome_id");
       const measurement_id = urlObj.searchParams.get("measurement_id");
 
@@ -3429,7 +3429,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -3604,7 +3604,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -3765,7 +3765,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -3900,7 +3900,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -4050,7 +4050,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -4385,9 +4385,15 @@ const server = http.createServer(async (req, res) => {
       const conflictPenalty =
         Math.min(0.50, openConflicts * 0.15);
 
+      const verificationFactor =
+        verificationConfidence / 100;
+
+      const sourceQualityFactor =
+        sourceQuality / 100;
+
       let confidenceScore =
-        (verificationConfidence * 0.45) +
-        (sourceQuality * 0.30) +
+        (verificationFactor * 0.45) +
+        (sourceQualityFactor * 0.30) +
         (evidenceFactor * 0.25) -
         unknownPenalty -
         conflictPenalty;
@@ -4485,7 +4491,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -4664,7 +4670,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -4802,7 +4808,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -5009,7 +5015,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -5153,7 +5159,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -5333,7 +5339,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -5712,7 +5718,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -5853,7 +5859,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -6029,7 +6035,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -6257,7 +6263,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -6591,7 +6597,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -6744,7 +6750,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
