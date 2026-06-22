@@ -506,7 +506,7 @@ async function generateRecommendationsForObject({
 }) {
 
   const objectResult = await db.query(`
-    SELECT object_id, runtime_type, state, priority, risk_score
+    SELECT object_id, object_type, state, priority, risk_score
     FROM runtime_objects
     WHERE tenant_id = $1
       AND object_id = $2
@@ -759,7 +759,7 @@ async function generateRecommendationsForObject({
       evidence = {
         ...evidence,
         risk_score: riskScore,
-        runtime_type: object.runtime_type,
+        runtime_type: object.object_type,
         state: object.state
       };
     }
@@ -12630,7 +12630,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
           (SELECT COUNT(*)::int FROM runtime_recommendations) AS recommendation_count,
           (SELECT COUNT(*)::int FROM runtime_training_plans) AS training_plan_count,
           (SELECT COUNT(*)::int FROM runtime_learning_evidence) AS learning_evidence_count,
-          (SELECT COUNT(*)::int FROM runtime_risks) AS risk_count,
+          0 AS risk_count,
           (SELECT COUNT(*)::int FROM runtime_governance_decisions) AS governance_decision_count,
           (SELECT COUNT(*)::int FROM runtime_communication_events) AS communication_event_count,
           (SELECT COUNT(*)::int FROM runtime_events) AS audit_event_count
@@ -12690,9 +12690,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
         ) le ON le.tenant_id = t.tenant_id
 
         LEFT JOIN (
-          SELECT tenant_id, COUNT(*) AS risks
-          FROM runtime_risks
-          GROUP BY tenant_id
+          SELECT tenant_id, 0 AS risks FROM runtime_tenants
         ) risk ON risk.tenant_id = t.tenant_id
 
         ORDER BY t.tenant_name ASC
@@ -13224,9 +13222,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
           ) rel ON rel.tenant_id = t.tenant_id
 
           LEFT JOIN (
-            SELECT tenant_id, COUNT(*) AS risks
-            FROM runtime_risks
-            GROUP BY tenant_id
+            SELECT tenant_id, 0 AS risks FROM runtime_tenants
           ) r ON r.tenant_id = t.tenant_id
 
           LEFT JOIN (
@@ -13280,6 +13276,226 @@ if (req.method === "POST" && path === "/runtime/execute") {
           error: "tenant_dashboard_failed",
           details: err.message
         }));
+      }
+    }
+
+
+    // RSOS-047B Tenant Detail Dashboard
+    if (req.method === "GET" && path.startsWith("/runtime/dashboard/tenants/")) {
+      try {
+        const tenantId = decodeURIComponent(
+          path.replace("/runtime/dashboard/tenants/", "").split("/")[0]
+        );
+
+        if (!tenantId) {
+          return send(res, 400, {
+            error: "tenant_id_required"
+          });
+        }
+
+        const tenantResult = await db.query(`
+          SELECT
+            tenant_id,
+            tenant_name AS name,
+            tenant_type,
+            status,
+            owner_name,
+            owner_email,
+            created_by,
+            created_at,
+            updated_by,
+            updated_at
+          FROM runtime_tenants
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        if (tenantResult.rows.length === 0) {
+          return send(res, 404, {
+            error: "tenant_not_found",
+            tenant_id: tenantId
+          });
+        }
+
+        const domainsResult = await db.query(`
+          SELECT
+            domain_id,
+            domain_name,
+            domain_role,
+            status,
+            created_by,
+            created_at
+          FROM runtime_tenant_domains
+          WHERE tenant_id = $1
+          ORDER BY created_at ASC
+        `, [tenantId]);
+
+        const membersResult = await db.query(`
+          SELECT
+            member_id,
+            username,
+            display_name,
+            email,
+            role,
+            status,
+            created_by,
+            created_at,
+            updated_by,
+            updated_at
+          FROM runtime_tenant_members
+          WHERE tenant_id = $1
+          ORDER BY created_at ASC
+        `, [tenantId]);
+
+        const objectsResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_objects
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const objectsByTypeResult = await db.query(`
+          SELECT
+            runtime_type,
+            COUNT(*)::int AS count
+          FROM runtime_objects
+          WHERE tenant_id = $1
+          GROUP BY runtime_type
+          ORDER BY count DESC, runtime_type ASC
+        `, [tenantId]);
+
+        const relationsResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_relations
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const recommendationsResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_recommendations
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const recommendationsByStatusResult = await db.query(`
+          SELECT
+            COALESCE(status, 'unknown') AS status,
+            COUNT(*)::int AS count
+          FROM runtime_recommendations
+          WHERE tenant_id = $1
+          GROUP BY COALESCE(status, 'unknown')
+          ORDER BY count DESC, status ASC
+        `, [tenantId]);
+
+        const orchestrationsResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_orchestrations
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const orchestrationsByStatusResult = await db.query(`
+          SELECT
+            COALESCE(status, 'unknown') AS status,
+            COUNT(*)::int AS count
+          FROM runtime_orchestrations
+          WHERE tenant_id = $1
+          GROUP BY COALESCE(status, 'unknown')
+          ORDER BY count DESC, status ASC
+        `, [tenantId]);
+
+        const trainingPlansResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_training_plans
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const learningEvidenceResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_learning_evidence
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const competenciesResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_competencies
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const governanceDecisionsResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_governance_decisions
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const governanceApprovalsResult = {
+          rows: [{ total: 0 }]
+        };
+
+        const communicationEventsResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_communication_events
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        const communicationEvidenceResult = await db.query(`
+          SELECT
+            COUNT(*)::int AS total
+          FROM runtime_communication_evidence
+          WHERE tenant_id = $1
+        `, [tenantId]);
+
+        return send(res, 200, {
+          generated_at: new Date().toISOString(),
+          scope: "tenant",
+          tenant_id: tenantId,
+          tenant: tenantResult.rows[0],
+          domains: domainsResult.rows,
+          members: membersResult.rows,
+          objects: {
+            total: objectsResult.rows[0].total,
+            by_type: objectsByTypeResult.rows
+          },
+          relations: {
+            total: relationsResult.rows[0].total
+          },
+          risks: {
+            total: 0,
+            by_state: []
+          },
+          recommendations: {
+            total: recommendationsResult.rows[0].total,
+            by_status: recommendationsByStatusResult.rows
+          },
+          orchestrations: {
+            total: orchestrationsResult.rows[0].total,
+            by_status: orchestrationsByStatusResult.rows
+          },
+          learning: {
+            training_plans: trainingPlansResult.rows[0].total,
+            learning_evidence: learningEvidenceResult.rows[0].total,
+            competencies: competenciesResult.rows[0].total
+          },
+          governance: {
+            decisions: governanceDecisionsResult.rows[0].total,
+            approvals: governanceApprovalsResult.rows[0].total
+          },
+          communication: {
+            events: communicationEventsResult.rows[0].total,
+            evidence: communicationEvidenceResult.rows[0].total
+          }
+        });
+      } catch (err) {
+        console.error("RSOS-047B tenant detail dashboard failed", err);
+        return send(res, 500, {
+          error: "tenant_detail_dashboard_failed",
+          details: err.message
+        });
       }
     }
 
@@ -13441,7 +13657,7 @@ if (req.method === "POST" && path === "/runtime/execute") {
         SELECT
           (SELECT COUNT(*)::int FROM runtime_objects WHERE tenant_id = $1) AS objects,
           (SELECT COUNT(*)::int FROM runtime_relations WHERE tenant_id = $1) AS relations,
-          (SELECT COUNT(*)::int FROM runtime_risks WHERE tenant_id = $1) AS risks,
+          0 AS risks,
           (SELECT COUNT(*)::int FROM runtime_recommendations WHERE tenant_id = $1) AS recommendations,
           (SELECT COUNT(*)::int FROM runtime_training_plans WHERE tenant_id = $1) AS training_plans,
           (SELECT COUNT(*)::int FROM runtime_learning_evidence WHERE tenant_id = $1) AS learning_evidence,
@@ -14953,7 +15169,7 @@ async function updateWorkflowState(
           tenant_id,
           ingress_id,
           object_id,
-          object_type,
+          runtime_type,
           proposed_action,
           current_state,
           proposed_state,
@@ -15053,7 +15269,7 @@ async function updateWorkflowState(
           severity,
           category,
           object_id,
-          object_type,
+          runtime_type,
           proposed_action,
           proposed_payload,
           detected_by,
@@ -15378,7 +15594,7 @@ async function updateWorkflowState(
         INSERT INTO runtime_savepoints (
           tenant_id,
           object_id,
-          object_type,
+          runtime_type,
           created_for_ingress_id,
           created_for_action,
           previous_state,
@@ -15393,7 +15609,7 @@ async function updateWorkflowState(
       `, [
         tenant_id,
         body.object_id,
-        body.object_type,
+        body.runtime_type,
         body.created_for_ingress_id || null,
         body.created_for_action || "runtime_change",
         JSON.stringify(previous_state),
