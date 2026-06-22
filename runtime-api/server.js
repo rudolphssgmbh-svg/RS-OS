@@ -2578,7 +2578,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const source_id = body.source_id || null;
       const evidence_id = body.evidence_id || null;
       const report_type = body.report_type;
@@ -2724,7 +2724,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const report_id = body.report_id;
       const segment_type = body.segment_type;
       const segment_text = body.segment_text;
@@ -2874,7 +2874,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const object_id = body.object_id || null;
       const action_id = body.action_id || null;
       const outcome_type = body.outcome_type;
@@ -2945,7 +2945,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const outcome_id = body.outcome_id || null;
       const metric_name = body.metric_name;
       const metric_value = body.metric_value === undefined ? null : body.metric_value;
@@ -3155,7 +3155,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const outcome_id = body.outcome_id || null;
       const measurement_id = body.measurement_id || null;
       const hypothesis_id = body.hypothesis_id || null;
@@ -3279,7 +3279,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const verification_result_id = body.verification_result_id || null;
       const fact_text = body.fact_text;
       const confidence = body.confidence || null;
@@ -3478,7 +3478,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const related_object_type = body.related_object_type || null;
       const related_object_id = body.related_object_id || null;
       const unknown_type = body.unknown_type;
@@ -3683,7 +3683,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const source_id = body.source_id || null;
       const quality_dimension = body.quality_dimension;
       const rating = body.rating || null;
@@ -3813,7 +3813,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const source_id_a = body.source_id_a || null;
       const source_id_b = body.source_id_b || null;
       const conflict_type = body.conflict_type;
@@ -3952,7 +3952,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const rule_name = body.rule_name;
       const minimum_verification_confidence = body.minimum_verification_confidence || null;
       const minimum_source_quality = body.minimum_source_quality || null;
@@ -4098,7 +4098,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const fact_id = body.fact_id;
 
       if (!tenant_id || !fact_id) {
@@ -4287,7 +4287,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const fact_id = body.fact_id;
       const calculated_by = authUser.operator_id || authUser.role || "runtime_user";
 
@@ -4530,7 +4530,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const fact_id = body.fact_id;
       const checked_by = authUser.operator_id || authUser.role || "runtime_user";
 
@@ -4711,7 +4711,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const governance_check_id = body.governance_check_id || null;
       const fact_id = body.fact_id || null;
       const outcome_status = body.outcome_status;
@@ -4853,7 +4853,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const outcome_id = body.outcome_id;
       const created_by = authUser.operator_id || authUser.role || "runtime_user";
 
@@ -5058,7 +5058,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const heuristic_name = body.heuristic_name;
       const heuristic_category = body.heuristic_category || null;
       const description = body.description || null;
@@ -5203,7 +5203,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const heuristic_id = body.heuristic_id;
       const related_object_type = body.related_object_type || null;
       const related_object_id = body.related_object_id || null;
@@ -5386,7 +5386,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const trigger_id = body.trigger_id;
       const created_by = authUser.operator_id || authUser.role || "runtime_user";
 
@@ -5541,7 +5541,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const heuristic_id = body.heuristic_id;
       const trigger_id = body.trigger_id || null;
       const lesson_id = body.lesson_id || null;
@@ -5763,7 +5763,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const pattern_name = body.pattern_name;
       const pattern_category = body.pattern_category || null;
       const description = body.description || null;
@@ -5902,7 +5902,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const pattern_id = body.pattern_id;
       const related_object_type = body.related_object_type || null;
       const related_object_id = body.related_object_id || null;
@@ -6086,7 +6086,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const pattern_id = body.pattern_id;
       const match_id = body.match_id || null;
       const lesson_id = body.lesson_id || null;
@@ -6308,7 +6308,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const fact_id = body.fact_id;
       const heuristic_id = body.heuristic_id || null;
       const pattern_id = body.pattern_id || null;
@@ -6648,7 +6648,7 @@ const server = http.createServer(async (req, res) => {
 
       const body = await readBody(req);
 
-      const tenant_id = body.tenant_id || authUser.tenant_id;
+      const tenant_id = authUser.tenant_id;
       const policy_name = body.policy_name;
       const trust_level = body.trust_level;
       const min_trust_score = body.min_trust_score === undefined ? null : body.min_trust_score;
