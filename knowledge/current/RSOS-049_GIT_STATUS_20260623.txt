@@ -1,0 +1,47 @@
+ M dashboard/audit/audit-report-dashboard.txt
+ M dashboard/backup-health.txt
+ M dashboard/governance/governance-health.txt
+ M dashboard/master/master-dashboard.txt
+ M dashboard/operations/operations-health.txt
+ M dashboard/runtime/runtime-health.txt
+ M dashboard/tenant/tenant-dashboard.txt
+ M dashboard/unified/unified-dashboard.txt
+ M docker-compose.yml
+ M frontend/index.html
+ M knowledge/RSOS-060-ist-zustand-20260614-202049.txt
+ M runtime-api/Dockerfile
+?? changelog/
+?? docker-compose.before-rsos066b-env.20260605-202235.yml
+?? docker-compose.yml.bak-20260621-152057
+?? docker-compose.yml.bak-before-recovery-20260623-071126
+?? docker-compose.yml.bak-before-recovery-20260623-071231
+?? docker-compose.yml.bak-before-recovery-compose-20260621-152614
+?? docker-compose.yml.bak-before-recovery-compose-20260621-152652
+?? docker/
+?? frontend/index.before-rsos051d-admin-frontend.20260604-133246.html
+?? frontend/index.before-rsos053a-tenant-detail-view.20260604-135050.html
+?? knowledge/build_knowledge_json.sh
+?? knowledge/current/
+?? knowledge/export_snapshot.sh
+?? knowledge/generate_handoff.sh
+?? master
+?? node-agent/
+?? registry-server/
+?? runtime-api-recovery.inspect.json
+?? runtime-api.inspect.json
+?? runtime-api/016_runtime_relations.sql
+?? runtime-api/RSOS-060_IST_ZUSTAND_20260619.md
+?? runtime-api/RSOS-060_MODULARISIERUNG_STATUS_20260619.md
+?? runtime-api/modules/rsos060/assumptions-hypotheses-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/modules/rsos060/evidence-routes.before-audit-object-id-fix.20260619-062342.js
+?? runtime-api/modules/rsos060/evidence-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/modules/rsos060/sources-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060f.20260620.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060i-auto-result.20260620-163937.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos061a-learning-feedback.20260620-165410.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos061c-recommendation-feedback.20260620-170104.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos061f-rule-feedback.20260620-171422.js
+?? runtime-api/modules/rsos060/witness-observations-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/rsos066c_stress_test.sh
+?? runtime-api/rsos066c_stress_test_v2.sh

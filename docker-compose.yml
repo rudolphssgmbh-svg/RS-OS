@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: rsos_secure_2026
       POSTGRES_DB: rsos_runtime
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - ./storage/postgres:/var/lib/postgresql/data
 
@@ -17,11 +17,34 @@ services:
     container_name: rsos-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   runtime-api:
     build: ./runtime-api
     container_name: rsos-runtime-api
     restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DB_HOST: rsos-postgres
+      DB_USER: rsos
+      DB_PASSWORD: rsos_secure_2026
+      DB_NAME: rsos_runtime
+      JWT_SECRET: RSOS_SECURE_RUNTIME_2026
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+
+  runtime-api-recovery:
+    build: ./runtime-api
+    container_name: rsos-runtime-api-recovery
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DB_HOST: rsos-postgres
+      DB_USER: rsos
+      DB_PASSWORD: rsos_secure_2026
+      DB_NAME: rsos_runtime
+      JWT_SECRET: RSOS_SECURE_RUNTIME_2026
