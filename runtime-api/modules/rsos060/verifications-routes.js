@@ -736,6 +736,107 @@ async function handleRsos060VerificationsRoutes(ctx) {
         ]);
       }
 
+      // RSOS-061D negative learning feedback
+      if (check_status === "failed") {
+        await db.query(`
+          UPDATE runtime_recommendation_rules
+          SET
+            failure_count = failure_count + 1,
+            feedback_count = feedback_count + 1,
+            confidence_score = GREATEST(0, confidence_score - 5),
+            last_feedback_at = now(),
+            updated_by = $2,
+            updated_at = now()
+          WHERE tenant_id = $1
+            AND enabled = true
+        `, [
+          tenant_id,
+          actor
+        ]);
+
+        await db.query(`
+          INSERT INTO runtime_lessons_learned (
+            lesson_id,
+            tenant_id,
+            trust_level,
+            outcome_correct,
+            lesson_type,
+            lesson_summary,
+            recommended_action,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7
+          )
+        `, [
+          tenant_id,
+          "refuted",
+          false,
+          "verification_failed",
+          "Verification cycle " + verification_id + " failed check.",
+          "Reduce confidence and review recommendation assumptions before reuse.",
+          actor
+        ]);
+
+        await db.query(`
+          INSERT INTO runtime_unknowns (
+            unknown_id,
+            tenant_id,
+            related_object_type,
+            related_object_id,
+            unknown_type,
+            title,
+            description,
+            risk_level,
+            status,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9
+          )
+        `, [
+          tenant_id,
+          "verification_cycle",
+          verification_id,
+          "LEARNING_FEEDBACK",
+          "Failed verification requires learning review",
+          "A failed verification check indicates that assumptions, evidence, or recommendation rules may need review.",
+          3,
+          "open",
+          actor
+        ]);
+
+        await db.query(`
+          UPDATE runtime_verification_cycles
+          SET
+            verification_status = 'failed',
+            verification_result = 'failed check',
+            confidence_after = GREATEST(0, COALESCE(confidence_before, 50) - 10),
+            verified_at = now()
+          WHERE verification_id = $1
+            AND tenant_id = $2
+        `, [
+          verification_id,
+          tenant_id
+        ]);
+      }
+
       return send(res, 201, {
         verification_id,
         check: result.rows[0],
