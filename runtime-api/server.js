@@ -15638,11 +15638,59 @@ async function updateWorkflowState(
           })
         });
 
+        const verificationCycleResult = await db.query(`
+          INSERT INTO runtime_verification_cycles (
+            verification_id,
+            tenant_id,
+            hypothesis_id,
+            assumption_id,
+            verification_type,
+            verification_status,
+            expected_value,
+            confidence_before,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8
+          )
+          RETURNING *
+        `, [
+          tenant_id,
+          hypothesisResult.rows[0].hypothesis_id,
+          assumptionResult.rows[0].assumption_id,
+          "signal_validation",
+          "pending",
+          "Ingress signal should remain traceable and verifiable: " + ingress_current.ingress_id,
+          ingress_current.confidence_score || 70,
+          auth.user.username || "system"
+        ]);
+
+        await writeEvent({
+          event_type: "runtime.verification_cycle.generated",
+          object_id: ingress_current.target_object_id,
+          tenant_id,
+          message: JSON.stringify({
+            reason_code: "HYPOTHESIS_TO_VERIFICATION_CYCLE_FROM_INGRESS",
+            ingress_id: ingress_current.ingress_id,
+            hypothesis_id: hypothesisResult.rows[0].hypothesis_id,
+            verification_id: verificationCycleResult.rows[0].verification_id
+          })
+        });
+
         signal_bridge = {
           observation: observationResult.rows[0],
           evidence: evidenceResult.rows[0],
           assumption: assumptionResult.rows[0],
-          hypothesis: hypothesisResult.rows[0]
+          hypothesis: hypothesisResult.rows[0],
+          verification_cycle: verificationCycleResult.rows[0]
         };
       }
 
