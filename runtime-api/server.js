@@ -15732,6 +15732,7 @@ async function updateWorkflowState(
           evidence: evidenceResult.rows[0],
           assumption: assumptionResult.rows[0],
           hypothesis: hypothesisResult.rows[0],
+          verification: verificationObjectResult.rows[0],
           verification_cycle: verificationCycleResult.rows[0]
         };
       }
