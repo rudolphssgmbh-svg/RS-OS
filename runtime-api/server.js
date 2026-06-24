@@ -15638,6 +15638,47 @@ async function updateWorkflowState(
           })
         });
 
+        const verificationObjectResult = await db.query(`
+          INSERT INTO runtime_verifications (
+            verification_id,
+            tenant_id,
+            hypothesis_id,
+            verification_method,
+            verification_notes,
+            status,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6
+          )
+          RETURNING *
+        `, [
+          tenant_id,
+          hypothesisResult.rows[0].hypothesis_id,
+          "signal_validation",
+          "Verification object generated from ingress signal " + ingress_current.ingress_id,
+          "pending",
+          auth.user.username || "system"
+        ]);
+
+        await writeEvent({
+          event_type: "runtime.verification.generated",
+          object_id: ingress_current.target_object_id,
+          tenant_id,
+          message: JSON.stringify({
+            reason_code: "HYPOTHESIS_TO_VERIFICATION_OBJECT_FROM_INGRESS",
+            ingress_id: ingress_current.ingress_id,
+            hypothesis_id: hypothesisResult.rows[0].hypothesis_id,
+            verification_id: verificationObjectResult.rows[0].verification_id
+          })
+        });
+
         const verificationCycleResult = await db.query(`
           INSERT INTO runtime_verification_cycles (
             verification_id,
@@ -15651,7 +15692,6 @@ async function updateWorkflowState(
             created_by
           )
           VALUES (
-            gen_random_uuid(),
             $1,
             $2,
             $3,
@@ -15659,10 +15699,12 @@ async function updateWorkflowState(
             $5,
             $6,
             $7,
-            $8
+            $8,
+            $9
           )
           RETURNING *
         `, [
+          verificationObjectResult.rows[0].verification_id,
           tenant_id,
           hypothesisResult.rows[0].hypothesis_id,
           assumptionResult.rows[0].assumption_id,
