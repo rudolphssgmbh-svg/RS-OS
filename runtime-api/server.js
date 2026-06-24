@@ -15556,9 +15556,51 @@ async function updateWorkflowState(
           })
         });
 
+        const assumptionResult = await db.query(`
+          INSERT INTO runtime_assumptions (
+            assumption_id,
+            tenant_id,
+            evidence_id,
+            assumption_text,
+            confidence,
+            status,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6
+          )
+          RETURNING *
+        `, [
+          tenant_id,
+          evidenceResult.rows[0].evidence_id,
+          "Allowed ingress signal may represent a valid runtime observation requiring verification: " + ingress_current.ingress_id,
+          ingress_current.confidence_score || 70,
+          "open",
+          auth.user.username || "system"
+        ]);
+
+        await writeEvent({
+          event_type: "runtime.assumption.generated",
+          object_id: ingress_current.target_object_id,
+          tenant_id,
+          message: JSON.stringify({
+            reason_code: "EVIDENCE_TO_ASSUMPTION_FROM_INGRESS",
+            ingress_id: ingress_current.ingress_id,
+            evidence_id: evidenceResult.rows[0].evidence_id,
+            assumption_id: assumptionResult.rows[0].assumption_id
+          })
+        });
+
         signal_bridge = {
           observation: observationResult.rows[0],
-          evidence: evidenceResult.rows[0]
+          evidence: evidenceResult.rows[0],
+          assumption: assumptionResult.rows[0]
         };
       }
 
