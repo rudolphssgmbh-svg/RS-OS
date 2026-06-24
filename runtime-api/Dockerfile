@@ -8,6 +8,7 @@ RUN npm install --production
 COPY server.js .
 COPY keys ./keys
 COPY operators ./operators
+COPY modules ./modules
 
 EXPOSE 8080
 

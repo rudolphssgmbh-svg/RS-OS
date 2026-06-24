@@ -199,6 +199,26 @@ async function handleRsos060VerificationsRoutes(ctx) {
         });
       }
 
+      if (verification_id) {
+        const verificationTenantCheck = await db.query(`
+          SELECT verification_id, hypothesis_id
+          FROM runtime_verifications
+          WHERE tenant_id = $1
+            AND verification_id = $2
+          LIMIT 1
+        `, [
+          tenant_id,
+          verification_id
+        ]);
+
+        if (verificationTenantCheck.rows.length === 0) {
+          return send(res, 404, {
+            error: "not_found",
+            message: "verification not found for tenant"
+          });
+        }
+      }
+
       const result_id =
         "00000000-0000-4006-8000-" +
         crypto.randomBytes(6).toString("hex");
@@ -237,6 +257,145 @@ async function handleRsos060VerificationsRoutes(ctx) {
           tenant_id,
           verification_id
         ]);
+
+        const verificationLookup = await db.query(`
+          SELECT hypothesis_id
+          FROM runtime_verifications
+          WHERE tenant_id = $1
+            AND verification_id = $2
+          LIMIT 1
+        `, [
+          tenant_id,
+          verification_id
+        ]);
+
+        if (verificationLookup.rows.length > 0 && verificationLookup.rows[0].hypothesis_id) {
+          await db.query(`
+            UPDATE runtime_verification_cycles
+            SET verification_result_id = $1,
+                verification_status = CASE
+                  WHEN $2 IN ('confirmed', 'verified') THEN 'verified'
+                  ELSE verification_status
+                END,
+                verified_at = CASE
+                  WHEN $2 IN ('confirmed', 'verified') THEN NOW()
+                  ELSE verified_at
+                END
+            WHERE tenant_id = $3
+              AND hypothesis_id = $4
+              AND verification_result_id IS NULL
+          `, [
+            result_id,
+            result_status,
+            tenant_id,
+            verificationLookup.rows[0].hypothesis_id
+          ]);
+
+          await writeEvent({
+            tenant_id,
+            object_id: verificationLookup.rows[0].hypothesis_id,
+            event_type: "runtime.verification_cycle.linked",
+            message: JSON.stringify({
+              reason_code: "AUTO_LINK_RESULT_TO_CYCLE_BY_HYPOTHESIS",
+              performed_by: created_by,
+              tenant_id,
+              hypothesis_id: verificationLookup.rows[0].hypothesis_id,
+              verification_result_id: result_id,
+              result_status,
+              verification_status:
+                ["confirmed", "verified"].includes(result_status)
+                  ? "verified"
+                  : null
+            })
+          });
+        }
+      }
+
+      let autoFact = null;
+
+      if (accepted_as_fact === true) {
+        const fact_id =
+          "00000000-0000-4007-8000-" +
+          crypto.randomBytes(6).toString("hex");
+
+        const fact_text =
+          body.fact_text ||
+          result_notes ||
+          "Verification result accepted as fact.";
+
+        const fact_status = body.fact_status || "accepted";
+
+        await db.query(`
+          INSERT INTO runtime_facts (
+            fact_id,
+            tenant_id,
+            verification_result_id,
+            fact_text,
+            confidence,
+            fact_status,
+            created_by
+          )
+          VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `, [
+          fact_id,
+          tenant_id,
+          result_id,
+          fact_text,
+          confidence,
+          fact_status,
+          created_by
+        ]);
+
+        await db.query(`
+          UPDATE runtime_verification_cycles
+          SET fact_id = $1
+          WHERE tenant_id = $2
+            AND verification_result_id = $3
+            AND fact_id IS NULL
+        `, [
+          fact_id,
+          tenant_id,
+          result_id
+        ]);
+
+        await writeEvent({
+          tenant_id,
+          object_id: fact_id,
+          event_type: "runtime.fact.created",
+          message: JSON.stringify({
+            fact_id,
+            verification_result_id: result_id,
+            confidence,
+            fact_status,
+            auto_created: true
+          })
+        });
+
+        await writeEvent({
+          tenant_id,
+          object_id: fact_id,
+          event_type: "runtime.fact.auto_created",
+          message: JSON.stringify({
+            reason_code: "AUTO_CREATE_FACT_FROM_ACCEPTED_VERIFICATION_RESULT",
+            performed_by: created_by,
+            tenant_id,
+            fact_id,
+            verification_result_id: result_id,
+            confidence,
+            fact_status,
+            accepted_as_fact
+          })
+        });
+
+        autoFact = {
+          fact_id,
+          tenant_id,
+          verification_result_id: result_id,
+          fact_text,
+          confidence,
+          fact_status,
+          created_by
+        };
       }
 
       await writeEvent({
@@ -261,7 +420,8 @@ async function handleRsos060VerificationsRoutes(ctx) {
           confidence,
           accepted_as_fact,
           result_notes,
-          created_by
+          created_by,
+          auto_fact: autoFact
         }
       });
     }
