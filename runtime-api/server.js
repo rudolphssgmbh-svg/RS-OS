@@ -15597,10 +15597,52 @@ async function updateWorkflowState(
           })
         });
 
+        const hypothesisResult = await db.query(`
+          INSERT INTO runtime_hypotheses (
+            hypothesis_id,
+            tenant_id,
+            assumption_id,
+            hypothesis_text,
+            confidence,
+            verification_status,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6
+          )
+          RETURNING *
+        `, [
+          tenant_id,
+          assumptionResult.rows[0].assumption_id,
+          "If the allowed ingress signal is valid, then it should be verifiable as a runtime event: " + ingress_current.ingress_id,
+          ingress_current.confidence_score || 70,
+          "pending",
+          auth.user.username || "system"
+        ]);
+
+        await writeEvent({
+          event_type: "runtime.hypothesis.generated",
+          object_id: ingress_current.target_object_id,
+          tenant_id,
+          message: JSON.stringify({
+            reason_code: "ASSUMPTION_TO_HYPOTHESIS_FROM_INGRESS",
+            ingress_id: ingress_current.ingress_id,
+            assumption_id: assumptionResult.rows[0].assumption_id,
+            hypothesis_id: hypothesisResult.rows[0].hypothesis_id
+          })
+        });
+
         signal_bridge = {
           observation: observationResult.rows[0],
           evidence: evidenceResult.rows[0],
-          assumption: assumptionResult.rows[0]
+          assumption: assumptionResult.rows[0],
+          hypothesis: hypothesisResult.rows[0]
         };
       }
 
