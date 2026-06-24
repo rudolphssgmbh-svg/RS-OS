@@ -15452,9 +15452,120 @@ async function updateWorkflowState(
 
       const ingress_current = ingressRefresh.rows[0];
 
+      // RSOS-070A ingress to observation/evidence bridge
+      let signal_bridge = null;
+
+      if (ingress_current && ingress_current.defense_decision === "allow") {
+        const observationResult = await db.query(`
+          INSERT INTO runtime_observations (
+            observation_id,
+            tenant_id,
+            observation_text,
+            observation_time,
+            confidence,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            now(),
+            $3,
+            $4
+          )
+          RETURNING *
+        `, [
+          tenant_id,
+          "Ingress signal observed: " + ingress_current.ingress_id,
+          ingress_current.confidence_score || 70,
+          auth.user.username || "system"
+        ]);
+
+        const evidenceHash = require("crypto")
+          .createHash("sha256")
+          .update(JSON.stringify({
+            ingress_id: ingress_current.ingress_id,
+            payload_hash: ingress_current.payload_hash,
+            defense_decision: ingress_current.defense_decision
+          }))
+          .digest("hex");
+
+        const evidenceResult = await db.query(`
+          INSERT INTO runtime_evidence (
+            evidence_id,
+            tenant_id,
+            object_id,
+            event_id,
+            evidence_type,
+            title,
+            evidence_text,
+            evidence_hash,
+            confidence,
+            evidence_status,
+            observed_at,
+            created_by
+          )
+          VALUES (
+            gen_random_uuid(),
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            now(),
+            $10
+          )
+          RETURNING *
+        `, [
+          tenant_id,
+          ingress_current.target_object_id,
+          ingress_current.ingress_id,
+          "ingress_signal",
+          "Evidence from ingress signal",
+          "Evidence generated from allowed ingress signal " + ingress_current.ingress_id,
+          evidenceHash,
+          ingress_current.confidence_score || 70,
+          "captured",
+          auth.user.username || "system"
+        ]);
+
+        await db.query(`
+          UPDATE runtime_observations
+          SET evidence_id = $1
+          WHERE observation_id = $2
+            AND tenant_id = $3
+        `, [
+          evidenceResult.rows[0].evidence_id,
+          observationResult.rows[0].observation_id,
+          tenant_id
+        ]);
+
+        await writeEvent({
+          event_type: "runtime.signal.bridge.created",
+          object_id: ingress_current.target_object_id,
+          tenant_id,
+          message: JSON.stringify({
+            reason_code: "INGRESS_TO_OBSERVATION_EVIDENCE",
+            ingress_id: ingress_current.ingress_id,
+            observation_id: observationResult.rows[0].observation_id,
+            evidence_id: evidenceResult.rows[0].evidence_id
+          })
+        });
+
+        signal_bridge = {
+          observation: observationResult.rows[0],
+          evidence: evidenceResult.rows[0]
+        };
+      }
+
       return send(res, 201, {
         ingress: ingress_current,
-        defense_pipeline
+        defense_pipeline,
+        signal_bridge
       });
     }
 
