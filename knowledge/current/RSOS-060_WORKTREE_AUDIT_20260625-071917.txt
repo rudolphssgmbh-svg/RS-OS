@@ -1,0 +1,191 @@
+RSOS-060 WORKTREE AUDIT
+DATE: 2026-06-25T07:19:17+00:00
+
+BRANCH:
+feature/RSOS-060-evidence-foundation
+
+STATUS:
+ M dashboard/audit/audit-report-dashboard.txt
+ M dashboard/backup-health.txt
+ M dashboard/governance/governance-health.txt
+ M dashboard/master/master-dashboard.txt
+ M dashboard/operations/operations-health.txt
+ M dashboard/runtime/runtime-health.txt
+ M dashboard/tenant/tenant-dashboard.txt
+ M dashboard/unified/unified-dashboard.txt
+ M frontend/index.html
+ M knowledge/RSOS-060-ist-zustand-20260614-202049.txt
+?? changelog/
+?? docker-compose.before-rsos066b-env.20260605-202235.yml
+?? docker-compose.yml.bak-20260621-152057
+?? docker-compose.yml.bak-before-recovery-20260623-071126
+?? docker-compose.yml.bak-before-recovery-20260623-071231
+?? docker-compose.yml.bak-before-recovery-compose-20260621-152614
+?? docker-compose.yml.bak-before-recovery-compose-20260621-152652
+?? docker/
+?? frontend/index.before-rsos051d-admin-frontend.20260604-133246.html
+?? frontend/index.before-rsos053a-tenant-detail-view.20260604-135050.html
+?? knowledge/build_knowledge_json.sh
+?? knowledge/current/CHATGPT_HANDOFF.md
+?? knowledge/current/CHATGPT_HANDOFF.md.bak.foundation005.20260608T090613Z
+?? knowledge/current/CHECKPOINT_CHARLIE_STATUS.json
+?? knowledge/current/FOUNDATION_AUDIT_REPORT.json
+?? knowledge/current/FOUNDATION_INVENTORY.json
+?? knowledge/current/FOUNDATION_INVENTORY.json.bak.foundation014.20260608T163504Z
+?? knowledge/current/FOUNDATION_INVENTORY.json.bak.foundation015b.20260608T170816Z
+?? knowledge/current/FOUNDATION_INVENTORY.json.bak.foundation015d.20260608T172137Z
+?? knowledge/current/FOUNDATION_INVENTORY.json.bak.foundation016b.20260608T181045Z
+?? knowledge/current/FOUNDATION_INVENTORY.json.bak.foundation017b.20260608T190721Z
+?? knowledge/current/FOUNDATION_INVENTORY.json.bak.foundation018b.20260608T185109Z
+?? knowledge/current/FOUNDATION_MAP.json
+?? knowledge/current/FOUNDATION_STATUS.json
+?? knowledge/current/FOUNDATION_WITNESS.json
+?? knowledge/current/FOUNDATION_WITNESS.sha256
+?? knowledge/current/PEER_REGISTRY.json
+?? knowledge/current/PEER_REGISTRY.json.bak.20260608T102314Z
+?? knowledge/current/RECOVERY_STATUS.json
+?? knowledge/current/RECOVERY_TEST_REPORT.json
+?? knowledge/current/RSOS-060_WORKTREE_AUDIT_20260625-071917.txt
+?? knowledge/current/SECURE_ACCESS_STATUS.json
+?? knowledge/current/TROJA_STATUS.json
+?? knowledge/current/WITNESS_REGISTRY.json
+?? knowledge/current/check_foundation_integrity.sh
+?? knowledge/current/check_foundation_integrity.sh.bak.fix-empty-missing.20260608T124332Z
+?? knowledge/current/check_foundation_integrity.sh.bak.foundation014.20260608T163945Z
+?? knowledge/current/check_foundation_integrity.sh.bak.foundation015c.20260608T170915Z
+?? knowledge/current/check_foundation_integrity.sh.bak.foundation015e.20260608T172519Z
+?? knowledge/current/check_foundation_integrity.sh.bak.foundation016c.20260608T181330Z
+?? knowledge/current/check_foundation_integrity.sh.bak.foundation017c.20260608T190815Z
+?? knowledge/current/check_foundation_integrity.sh.bak.foundation018c.20260608T185438Z
+?? knowledge/current/generate_foundation_hash.sh
+?? knowledge/current/generate_foundation_hash.sh.bak.foundation008.20260608T094023Z
+?? knowledge/current/generate_foundation_status.sh
+?? knowledge/current/generate_foundation_status.sh.bak.foundation006.20260608T092606Z
+?? knowledge/current/generate_foundation_witness.sh
+?? knowledge/current/generate_foundation_witness.sh.bak.foundation001e.20260608T105233Z
+?? knowledge/current/generate_foundation_witness.sh.bak.foundation012.20260608T122945Z
+?? knowledge/current/generate_foundation_witness.sh.bak.foundation015f.20260608T173234Z
+?? knowledge/current/generate_foundation_witness.sh.bak.foundation017d.20260608T191121Z
+?? knowledge/current/generate_foundation_witness.sh.bak.foundation018d.20260608T185908Z
+?? knowledge/current/generate_foundation_witness.sh.bak.secure001e.20260608T110437Z
+?? knowledge/current/knowledge.json
+?? knowledge/current/rsos-runtime-api-recovery.inspect.json
+?? knowledge/export_snapshot.sh
+?? knowledge/generate_handoff.sh
+?? master
+?? node-agent/
+?? registry-server/
+?? runtime-api-recovery.inspect.json
+?? runtime-api.inspect.json
+?? runtime-api/016_runtime_relations.sql
+?? runtime-api/RSOS-060_IST_ZUSTAND_20260619.md
+?? runtime-api/RSOS-060_MODULARISIERUNG_STATUS_20260619.md
+?? runtime-api/migrations/090_runtime_verification_cycle_result_link.sql
+?? runtime-api/migrations/obsolete/
+?? runtime-api/modules/rsos060/assumptions-hypotheses-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/modules/rsos060/evidence-routes.before-audit-object-id-fix.20260619-062342.js
+?? runtime-api/modules/rsos060/evidence-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/modules/rsos060/sources-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/modules/rsos060/verifications-routes.before-route-fix.20260623-210128.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060c-auto-fact.20260624-062302.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060c-auto-fact.20260624-062332.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060c-auto-fact.20260624-062656.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060f.20260620.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos060i-auto-result.20260620-163937.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos061a-learning-feedback.20260620-165410.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos061c-recommendation-feedback.20260620-170104.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos061d-negative-learning.20260624-195053.js
+?? runtime-api/modules/rsos060/verifications-routes.before-rsos061f-rule-feedback.20260620-171422.js
+?? runtime-api/modules/rsos060/witness-observations-routes.before-rsos060d-tenant-hardening.20260622-102526.js
+?? runtime-api/rsos066c_stress_test.sh
+?? runtime-api/rsos066c_stress_test_v2.sh
+
+DIFF STAT:
+ dashboard/audit/audit-report-dashboard.txt         |   6 +-
+ dashboard/backup-health.txt                        |   2 +-
+ dashboard/governance/governance-health.txt         |   8 +-
+ dashboard/master/master-dashboard.txt              |   8 +-
+ dashboard/operations/operations-health.txt         |   8 +-
+ dashboard/runtime/runtime-health.txt               |  10 +-
+ dashboard/tenant/tenant-dashboard.txt              |  21 +-
+ dashboard/unified/unified-dashboard.txt            |   8 +-
+ frontend/index.html                                | 728 ++++++++++++---------
+ knowledge/RSOS-060-ist-zustand-20260614-202049.txt |   4 +
+ 10 files changed, 449 insertions(+), 354 deletions(-)
+
+MIGRATIONS:
+total 320
+drwxr-xr-x 3 administrator administrator  4096 Jun 24 05:21 .
+drwxr-xr-x 8 administrator administrator 28672 Jun 24 21:14 ..
+-rw-r--r-- 1 administrator administrator   319 May 29 12:50 001_customers.sql
+-rw-r--r-- 1 administrator administrator   606 May 28 05:58 001_runtime_temporal_queue.sql
+-rw-r--r-- 1 administrator administrator   425 May 28 08:04 002_runtime_workflow_engine.sql
+-rw-r--r-- 1 administrator administrator   620 May 28 15:07 003_runtime_dag_dependencies.sql
+-rw-r--r-- 1 administrator administrator   651 May 28 17:52 004_runtime_workflow_instances.sql
+-rw-rw-r-- 1 administrator administrator   708 Jun  2 18:56 005_runtime_recommendations.sql
+-rw-rw-r-- 1 administrator administrator   495 Jun  2 20:26 006_runtime_recommendation_rules.sql
+-rw-rw-r-- 1 administrator administrator   588 Jun  3 05:05 007_runtime_competencies.sql
+-rw-rw-r-- 1 administrator administrator   842 Jun  3 05:56 008_runtime_training_plans.sql
+-rw-rw-r-- 1 administrator administrator   731 Jun  3 10:04 009_runtime_learning_evidence.sql
+-rw-rw-r-- 1 administrator administrator   893 Jun  3 10:54 010_runtime_communication_events.sql
+-rw-rw-r-- 1 administrator administrator   964 Jun  3 11:54 011_runtime_communication_evidence.sql
+-rw-rw-r-- 1 administrator administrator   877 Jun  3 12:22 012_runtime_orchestrations.sql
+-rw-rw-r-- 1 administrator administrator   511 Jun  3 15:24 013_runtime_orchestration_rules.sql
+-rw-rw-r-- 1 administrator administrator  1685 Jun  4 07:59 014_runtime_tenant_registry.sql
+-rw-rw-r-- 1 administrator administrator   901 Jun  4 09:38 015_runtime_tenant_members.sql
+-rw-rw-r-- 1 administrator administrator   776 Jun  4 11:08 016_runtime_operator_credentials.sql
+-rw-rw-r-- 1 administrator administrator  1379 Jun  4 11:16 017_seed_berufsbildung_competencies.sql
+-rw-rw-r-- 1 administrator administrator   411 Jun  4 12:15 018_system_admin_scope.sql
+-rw-rw-r-- 1 administrator administrator   969 Jun  4 14:10 019_runtime_knowledge.sql
+-rw-rw-r-- 1 administrator administrator   757 Jun  4 14:12 019_runtime_knowledge_upgrade.sql
+-rw-rw-r-- 1 administrator administrator  1200 Jun  5 08:26 020_runtime_evidence_foundation.sql
+-rw-rw-r-- 1 administrator administrator  1081 Jun  5 08:48 021_runtime_witness_observation.sql
+-rw-rw-r-- 1 administrator administrator  1098 Jun  5 09:06 022_runtime_assumptions_hypotheses.sql
+-rw-rw-r-- 1 administrator administrator  1198 Jun  5 09:15 023_runtime_verifications.sql
+-rw-rw-r-- 1 administrator administrator  1068 Jun  5 09:26 024_runtime_facts.sql
+-rw-rw-r-- 1 administrator administrator   968 Jun  5 09:47 025_runtime_unknowns.sql
+-rw-rw-r-- 1 administrator administrator  1167 Jun  5 09:59 026_runtime_source_quality.sql
+-rw-rw-r-- 1 administrator administrator   680 Jun  5 14:09 027_runtime_fact_acceptance_rules.sql
+-rw-rw-r-- 1 administrator administrator   652 Jun  5 14:45 028_runtime_fact_confidence.sql
+-rw-rw-r-- 1 administrator administrator   795 Jun  5 15:03 029_runtime_governance_checks.sql
+-rw-rw-r-- 1 administrator administrator  1652 Jun 14 20:33 029_runtime_reports.sql
+-rw-rw-r-- 1 administrator administrator   812 Jun  5 15:26 030_runtime_governance_outcomes.sql
+-rw-rw-r-- 1 administrator administrator   116 Jun 14 20:58 031_runtime_governance_decision_type_fix.sql
+-rw-rw-r-- 1 administrator administrator   788 Jun  5 15:41 031_runtime_lessons_learned.sql
+-rw-rw-r-- 1 administrator administrator   759 Jun  5 16:11 032_runtime_heuristics.sql
+-rw-rw-r-- 1 administrator administrator  1396 Jun 14 22:13 032_runtime_measurements_outcomes.sql
+-rw-rw-r-- 1 administrator administrator   811 Jun  5 16:22 033_runtime_heuristic_triggers.sql
+-rw-rw-r-- 1 administrator administrator  1013 Jun 15 05:21 033_runtime_verification_engine.sql
+-rw-rw-r-- 1 administrator administrator   881 Jun  5 16:58 034_runtime_heuristic_feedback.sql
+-rw-rw-r-- 1 administrator administrator  1072 Jun 20 12:34 034_runtime_verification_checks.sql
+-rw-rw-r-- 1 administrator administrator   719 Jun  5 17:37 035_runtime_patterns.sql
+-rw-rw-r-- 1 administrator administrator   798 Jun  5 17:51 036_runtime_pattern_matches.sql
+-rw-rw-r-- 1 administrator administrator   844 Jun  5 18:15 037_runtime_pattern_feedback.sql
+-rw-rw-r-- 1 administrator administrator  1309 Jun  5 18:45 038_runtime_cross_loop_validations.sql
+-rw-rw-r-- 1 administrator administrator   838 Jun  5 19:22 039_runtime_governance_policies.sql
+-rw-rw-r-- 1 administrator administrator  1348 Jun  5 20:09 040_runtime_ingress_events.sql
+-rw-rw-r-- 1 administrator administrator  1227 Jun  5 20:10 041_runtime_quarantine_queue.sql
+-rw-rw-r-- 1 administrator administrator  1113 Jun  5 20:10 042_runtime_savepoints.sql
+-rw-rw-r-- 1 administrator administrator  1370 Jun  5 20:11 043_runtime_shadow_validations.sql
+-rw-rw-r-- 1 administrator administrator  1201 Jun  5 20:12 044_runtime_defense_state.sql
+-rw-rw-r-- 1 administrator administrator  1257 Jun  5 21:28 045_runtime_recovery_requests.sql
+-rw-rw-r-- 1 administrator administrator   897 Jun  5 21:52 046_runtime_recovery_verifications.sql
+-rw-rw-r-- 1 administrator administrator   779 Jun  5 22:15 047_runtime_audit_reports.sql
+-rw-rw-r-- 1 administrator administrator  1112 Jun  5 22:03 047_runtime_defense_metrics.sql
+-rw-rw-r-- 1 administrator administrator  1004 Jun  6 07:10 071_runtime_incidents.sql
+-rw-rw-r-- 1 administrator administrator   667 Jun  6 07:10 072_runtime_incident_links.sql
+-rw-rw-r-- 1 administrator administrator   948 Jun  6 08:16 073_runtime_incident_lessons.sql
+-rw-r--r-- 1 root          root            723 Jun 17 19:38 074_runtime_learning_states.sql
+-rw-r--r-- 1 root          root            767 Jun 17 19:49 075_runtime_competence_states.sql
+-rw-r--r-- 1 root          root            615 Jun 17 19:51 076_runtime_competence_gaps.sql
+-rw-r--r-- 1 root          root            628 Jun 17 19:52 077_runtime_qualifications.sql
+-rw-r--r-- 1 root          root            606 Jun 17 20:00 078_runtime_learning_paths.sql
+-rw-r--r-- 1 root          root            700 Jun 17 20:01 079_runtime_learning_recommendations.sql
+-rw-r--r-- 1 root          root            698 Jun 17 20:38 080_runtime_assessments.sql
+-rw-r--r-- 1 root          root            779 Jun 17 20:44 081_runtime_assessment_attempts.sql
+-rw-rw-r-- 1 administrator administrator   521 Jun 20 17:07 082_runtime_recommendation_rule_feedback.sql
+-rw-rw-r-- 1 administrator administrator  1856 Jun 20 20:06 082_runtime_recommendation_verification_gates.sql
+-rw-rw-r-- 1 administrator administrator   995 Jun 21 12:16 083_runtime_governance_decisions.sql
+-rw-rw-r-- 1 administrator administrator   578 Jun 24 05:26 090_runtime_verification_cycle_result_link.sql
+drwxrwxr-x 2 administrator administrator  4096 Jun 23 19:57 obsolete
