@@ -17,3 +17,22 @@ runtime-api/server.js.save.*
 
 # RSOS runtime generated logs
 runtime-api/scripts/**/*.log
+
+# RSOS generated inventories and local audit snapshots
+knowledge/current/REPOSITORY_FILE_INVENTORY.txt
+
+# Local backup and pre-change snapshots
+*.bak
+*.bak-*
+*.before-*
+*.inspect.json
+*.save.*
+*.backup.*
+docker-compose*.bak*
+docker-compose.before-*
+frontend/*.before-*.html
+runtime-api/**/*.before-*.js
+
+# Local runtime/generated artifacts
+runtime-api/rsos066c_stress_test*.sh
+*.bak.*
