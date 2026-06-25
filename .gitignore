@@ -36,3 +36,13 @@ runtime-api/**/*.before-*.js
 # Local runtime/generated artifacts
 runtime-api/rsos066c_stress_test*.sh
 *.bak.*
+
+# Registry server runtime artifacts
+registry-server/node_modules/
+registry-server/*.log
+registry-server/data/events.json
+registry-server/events.json
+
+# Node agent package/build artifacts
+node-agent/work/
+*.rspkg
