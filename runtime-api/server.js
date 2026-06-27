@@ -7,12 +7,12 @@ const { handleRsos060EvidenceRoutes } = require("./modules/rsos060/evidence-rout
 const { handleRsos060WitnessObservationsRoutes } = require("./modules/rsos060/witness-observations-routes");
 const { handleRsos060AssumptionsHypothesesRoutes } = require("./modules/rsos060/assumptions-hypotheses-routes");
 const { handleRsos060VerificationsRoutes } = require("./modules/rsos060/verifications-routes");
-const { Pool } = require("pg");
 const jwt = require("jsonwebtoken");
 const { send } = require("./response/send");
 const { createAuditHash } = require("./evidence/audit-hash");
 const { verifyOperatorSignature, generateToken, verifyToken, requireRole } = require("./verification/auth");
 const { readBody } = require("./ingress/body");
+const { db } = require("./bootstrap/database");
 
 //const ROOT_PUBLIC_KEY = fs.readFileSync(
 //  "/app/keys/root_public.pem",
@@ -21,15 +21,6 @@ const { readBody } = require("./ingress/body");
 const ROOT_PUBLIC_KEY = "DEV_MODE";
 
 const JWT_SECRET = process.env.JWT_SECRET || "RSOS_SECURE_RUNTIME_2026";
-
-const db = new Pool({
-  host: process.env.DB_HOST || "rsos-postgres",
-  port: 5432,
-  user: process.env.DB_USER || "rsos",
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME || "rsos_runtime"
-});
-
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
