@@ -21,6 +21,7 @@ const { handleAuditChainVerifyRoute } = require("./routes/events/audit-chain-rou
 const { handleListRuntimeObjectsRoute } = require("./routes/objects/list-objects-route");
 const { handleCreateRuntimeObjectRoute } = require("./routes/objects/create-object-route");
 const { getTraceObject } = require("./trace/providers/object-provider");
+const { getTraceRelations } = require("./trace/providers/relation-provider");
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
@@ -10473,19 +10474,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         mode: "full"
       });
 
-      const relationsResult = await db.query(`
-        SELECT *
-        FROM runtime_relations
-        WHERE tenant_id = $1
-          AND (
-            source_object_id = $2
-            OR target_object_id = $2
-          )
-        ORDER BY created_at DESC
-      `, [
+      const relationsResult = await getTraceRelations({
+        db,
         tenant_id,
-        object_id
-      ]);
+        object_id,
+        mode: "full"
+      });
 
       const recommendationsResult = await db.query(`
         SELECT *
@@ -10698,16 +10692,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         ORDER BY created_at DESC
       `, [auth.user.tenant_id, object_id]);
 
-      const relationResult = await db.query(`
-        SELECT relation_id, source_object_id, target_object_id, relation_type, created_at
-        FROM runtime_relations
-        WHERE tenant_id = $1
-          AND (
-            source_object_id = $2
-            OR target_object_id = $2
-          )
-        ORDER BY created_at DESC
-      `, [auth.user.tenant_id, object_id]);
+      const relationResult = await getTraceRelations({
+        db,
+        tenant_id: auth.user.tenant_id,
+        object_id,
+        mode: "compact"
+      });
 
       const recommendationResult = await db.query(`
         SELECT
