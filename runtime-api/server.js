@@ -18,6 +18,7 @@ const { handleHealthRoute } = require("./routes/health/health-route");
 const { handleAuthLoginRoute } = require("./routes/auth/login-route");
 const { handleRuntimeEventsRoute } = require("./routes/events/runtime-events-route");
 const { handleAuditChainVerifyRoute } = require("./routes/events/audit-chain-route");
+const { handleListRuntimeObjectsRoute } = require("./routes/objects/list-objects-route");
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
@@ -7171,28 +7172,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
     // GET OBJECTS
 
     if (req.method === "GET" && path === "/runtime/objects") {
-
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "auditor"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-
-
-      const result = await db.query(`
-        SELECT *
-        FROM runtime_objects
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-      `, [auth.user.tenant_id]);
-
-      return send(res, 200, {
-        count: result.rows.length,
-        objects: result.rows
+      return handleListRuntimeObjectsRoute({
+        req,
+        res,
+        db,
+        send,
+        requireRole
       });
     }
 
