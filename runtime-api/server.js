@@ -15,14 +15,6 @@ const { readBody } = require("./ingress/body");
 const { db } = require("./bootstrap/database");
 const { initDb } = require("./bootstrap/init-db");
 
-//const ROOT_PUBLIC_KEY = fs.readFileSync(
-//  "/app/keys/root_public.pem",
-//  "utf8"
-//);
-const ROOT_PUBLIC_KEY = "DEV_MODE";
-
-const JWT_SECRET = process.env.JWT_SECRET || "RSOS_SECURE_RUNTIME_2026";
-
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
     SELECT *
