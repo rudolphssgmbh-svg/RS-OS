@@ -12,6 +12,7 @@ const jwt = require("jsonwebtoken");
 const { send } = require("./response/send");
 const { createAuditHash } = require("./evidence/audit-hash");
 const { verifyOperatorSignature, generateToken, verifyToken, requireRole } = require("./verification/auth");
+const { readBody } = require("./ingress/body");
 
 //const ROOT_PUBLIC_KEY = fs.readFileSync(
 //  "/app/keys/root_public.pem",
@@ -382,26 +383,6 @@ async function writeEvent({
 
 
 
-function readBody(req) {
-
-  return new Promise((resolve, reject) => {
-
-    let body = "";
-
-    req.on("data", chunk => {
-      body += chunk;
-    });
-
-    req.on("end", () => {
-
-      try {
-        resolve(body ? JSON.parse(body) : {});
-      } catch (err) {
-        reject(new Error("Invalid JSON"));
-      }
-    });
-  });
-}
 
 
 
