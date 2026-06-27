@@ -16,6 +16,7 @@ const { db } = require("./bootstrap/database");
 const { initDb } = require("./bootstrap/init-db");
 const { handleHealthRoute } = require("./routes/health/health-route");
 const { handleAuthLoginRoute } = require("./routes/auth/login-route");
+const { handleRuntimeEventsRoute } = require("./routes/events/runtime-events-route");
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
@@ -7197,35 +7198,14 @@ if (req.method === "POST" && path === "/runtime/execute") {
     // GET EVENTS
 
     if (req.method === "GET" && path === "/runtime/events") {
-
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "auditor"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-
-      const result = await db.query(`
-        SELECT *
-        FROM runtime_events
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-      `, [auth.user.tenant_id]);
-
-      return send(res, 200, {
-        count: result.rows.length,
-        events: result.rows
+      return handleRuntimeEventsRoute({
+        req,
+        res,
+        db,
+        send,
+        requireRole
       });
     }
-
-
-
-
-
-
 
     // VERIFY AUDIT HASH CHAIN
 
