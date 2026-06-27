@@ -9,6 +9,7 @@ const { handleRsos060AssumptionsHypothesesRoutes } = require("./modules/rsos060/
 const { handleRsos060VerificationsRoutes } = require("./modules/rsos060/verifications-routes");
 const { Pool } = require("pg");
 const jwt = require("jsonwebtoken");
+const { send } = require("./response/send");
 
 //const ROOT_PUBLIC_KEY = fs.readFileSync(
 //  "/app/keys/root_public.pem",
@@ -299,19 +300,6 @@ async function initDb() {
   console.log("Database initialized");
 }
 
-function send(res, code, data) {
-  res.writeHead(code, {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "https://app.rudolph-buchhaltung.de",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization"
-  });
-
-  res.end(JSON.stringify({
-    timestamp: new Date().toISOString(),
-...data
-  }));
-}
 
 function createAuditHash(payload) {
   return crypto
