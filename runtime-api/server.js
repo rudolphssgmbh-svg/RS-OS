@@ -11,6 +11,7 @@ const { Pool } = require("pg");
 const jwt = require("jsonwebtoken");
 const { send } = require("./response/send");
 const { createAuditHash } = require("./evidence/audit-hash");
+const { verifyOperatorSignature, generateToken, verifyToken, requireRole } = require("./verification/auth");
 
 //const ROOT_PUBLIC_KEY = fs.readFileSync(
 //  "/app/keys/root_public.pem",
@@ -377,87 +378,9 @@ async function writeEvent({
 //   return verify.verify(ROOT_PUBLIC_KEY, signature);
 // }
 
-function verifyOperatorSignature() {
-  return true;
-}
-
-function generateToken(operator) {
-
-  return jwt.sign({
-      operator_id: operator.operator_id,
-      role: operator.role,
-      tenant_id: operator.tenant_id,
-      scope: operator.scope || "tenant",
-      system_role: operator.system_role || null
-    },
-    JWT_SECRET,
-    {
-      expiresIn: "12h"
-    }
-  );
-}
-
-function verifyToken(req) {
-
-  const auth = req.headers.authorization;
-
-  if (!auth) {
-    return null;
-  }
-
-  const token = auth.replace("Bearer ", "");
-
-  try {
-    return jwt.verify(token, JWT_SECRET);
 
 
-  } catch (err) {
-    return null;
-  }
-}
 
-function requireRole(req, allowedRoles) {
-
-  const authUser = verifyToken(req);
-
-  if (!authUser) {
-    return {
-      allowed: false,
-      code: 401,
-      response: {
-        error: "unauthorized",
-        message: "JWT token required"
-      }
-    };
-  }
-
-  const effectiveRoles = [
-    authUser.role,
-    authUser.system_role
-  ].filter(Boolean);
-
-  const hasAllowedRole = effectiveRoles.some(role =>
-    allowedRoles.includes(role)
-  );
-
-  if (!hasAllowedRole) {
-    return {
-      allowed: false,
-      code: 403,
-      response: {
-        error: "forbidden",
-        message: "insufficient_role",
-        required_roles: allowedRoles,
-        effective_roles: effectiveRoles
-      }
-    };
-  }
-
-  return {
-    allowed: true,
-    user: authUser
-  };
-}
 
 function readBody(req) {
 
