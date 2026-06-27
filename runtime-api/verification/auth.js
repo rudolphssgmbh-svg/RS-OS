@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 
-const JWT_SECRET = process.env.JWT_SECRET || "RSOS_SECURE_RUNTIME_2026";
+const JWT_SECRETT = process.env.JWT_SECRETT || "RSOS_SECURE_RUNTIME_2026";
 
 function verifyOperatorSignature() {
   return true;
@@ -13,7 +13,7 @@ function generateToken(operator) {
     tenant_id: operator.tenant_id,
     scope: operator.scope || "tenant",
     system_role: operator.system_role || null
-  }, JWT_SECRET, { expiresIn: "12h" });
+  }, JWT_SECRETT, { expiresIn: "12h" });
 }
 
 function verifyToken(req) {
@@ -26,7 +26,7 @@ function verifyToken(req) {
   const token = auth.replace("Bearer ", "");
 
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, JWT_SECRETT);
   } catch {
     return null;
   }
