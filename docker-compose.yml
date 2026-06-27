@@ -48,3 +48,25 @@ services:
       DB_PASSWORD: rsos_secure_2026
       DB_NAME: rsos_runtime
       JWT_SECRET: RSOS_SECURE_RUNTIME_2026
+
+  registry-server:
+    build: ./registry-server
+    container_name: rsos-registry-server
+    restart: unless-stopped
+    environment:
+      RSOS_REGISTRY_HOST: 0.0.0.0
+      RSOS_REGISTRY_PORT: 8090
+      RSOS_REGISTRY_BASE_DIR: /app
+      RSOS_REGISTRY_DATA_DIR: /data
+      RSOS_REGISTRY_USER: admin
+      RSOS_REGISTRY_PASSWORD: RSOS-2026-SECURE
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ./registry-server/data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://admin:RSOS-2026-SECURE@127.0.0.1:8090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

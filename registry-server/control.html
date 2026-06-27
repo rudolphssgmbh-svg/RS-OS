@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>RS OS Control Plane</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f3f4f6; padding:30px; color:#111827; }
+    h1 { margin-bottom:5px; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:15px; margin:20px 0; }
+    .card { background:white; border-radius:14px; padding:20px; margin:20px 0; box-shadow:0 4px 14px #0001; }
+    .stat { background:white; border-radius:14px; padding:18px; box-shadow:0 4px 14px #0001; }
+    .stat b { font-size:28px; display:block; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:10px; border-bottom:1px solid #e5e7eb; text-align:left; }
+    .online { color:green; font-weight:bold; }
+    .stale { color:orange; font-weight:bold; }
+    .offline { color:red; font-weight:bold; }
+.severity-info {
+  color:#2563eb;
+  font-weight:bold;
+}
+
+.severity-warning {
+  color:#d97706;
+  font-weight:bold;
+}
+
+.severity-error {
+  color:#dc2626;
+  font-weight:bold;
+}
+    button { background:#111827; color:white; border:0; border-radius:8px; padding:8px 12px; cursor:pointer; margin:3px; }
+    pre { background:#111827; color:#e5e7eb; padding:15px; border-radius:10px; overflow:auto; max-height:300px; }
+    .small { color:#6b7280; font-size:13px; }
+  </style>
+</head>
+<body>
+  <h1>RS OS Control Plane</h1>
+  <p>Distributed Runtime Fleet Management</p>
+  <p class="small">Last refresh: <span id="refreshTime">-</span></p>
+
+  <div class="grid">
+    <div class="stat">Online Nodes <b id="onlineCount">0</b></div>
+    <div class="stat">Offline Nodes <b id="offlineCount">0</b></div>
+    <div class="stat">Packages <b id="packageCount">0</b></div>
+    <div class="stat">Commands <b id="commandCount">0</b></div>
+  </div>
+
+  <div class="card">
+    <h2>Fleet Nodes</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Node</th><th>Version</th><th>Channel</th><th>Health</th><th>State</th><th>Heartbeat</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="nodes"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Runtime Metrics</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Node</th><th>CPU Load</th><th>RAM</th><th>Disk</th><th>Containers</th><th>Uptime</th>
+        </tr>
+      </thead>
+      <tbody id="metrics"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Packages</h2>
+    <pre id="packages">Loading...</pre>
+  </div>
+<h2>Event Timeline</h2>
+<table border="1" width="100%">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Type</th>
+      <th>Node</th>
+      <th>Message</th>
+    </tr>
+  </thead>
+  <tbody id="events"></tbody>
+</table>
+  <div class="card">
+    <h2>Command History</h2>
+    <pre id="commands">Loading...</pre>
+  </div>
+
+<script>
+async function sendCommand(nodeId, action) {
+  await fetch("/fleet/command", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ node_id: nodeId, action })
+  });
+  alert(action + " queued for " + nodeId);
+  refresh();
+}
+
+async function loadNodes() {
+  const res = await fetch("/fleet/status");
+  const data = await res.json();
+
+  const online = data.nodes.filter(n => n.state === "online").length;
+  const offline = data.nodes.filter(n => n.state === "offline").length;
+
+  document.getElementById("onlineCount").textContent = online;
+  document.getElementById("offlineCount").textContent = offline;
+
+  document.getElementById("nodes").innerHTML = data.nodes.map(n => `
+    <tr>
+      <td>${n.node_id}</td>
+      <td>${n.version}</td>
+      <td>${n.channel}</td>
+      <td>${n.health}</td>
+      <td class="${n.state}">${n.state}</td>
+      <td>${n.seconds_since_heartbeat}s</td>
+      <td>
+        <button onclick="sendCommand('${n.node_id}', 'restart-runtime')">Restart</button>
+        <button onclick="sendCommand('${n.node_id}', 'pull-latest')">Pull Latest</button>
+        <button onclick="sendCommand('${n.node_id}', 'rollback-runtime')">Rollback</button>
+      </td>
+    </tr>
+  `).join("");
+}
+
+async function loadMetrics() {
+  const res = await fetch("/fleet/metrics");
+  const data = await res.json();
+
+  document.getElementById("metrics").innerHTML = data.metrics.map(m => `
+    <tr>
+      <td>${m.hostname}</td>
+      <td>${m.cpu_load}</td>
+      <td>${m.memory_used_mb} MB / ${m.memory_total_mb} MB</td>
+      <td>${m.disk_used_percent}%</td>
+      <td>${m.containers_running}</td>
+      <td>${m.uptime}</td>
+    </tr>
+  `).join("");
+}
+
+async function loadPackages() {
+  const res = await fetch("/packages?channel=stable");
+  const data = await res.json();
+
+  document.getElementById("packageCount").textContent = data.packages.length;
+  document.getElementById("packages").textContent = JSON.stringify(data, null, 2);
+}
+
+async function loadCommands() {
+  const res = await fetch("/fleet/commands");
+  const data = await res.json();
+
+  document.getElementById("commandCount").textContent = data.total_commands;
+  document.getElementById("commands").textContent = JSON.stringify(data, null, 2);
+}
+
+async function refresh() {
+  await loadNodes();
+  await loadMetrics();
+  await loadPackages();
+  await loadCommands();
+  document.getElementById("refreshTime").textContent = new Date().toLocaleString();
+}
+async function loadEvents() {
+  const res = await fetch("/fleet/events");
+  const events = await res.json();
+
+  document.getElementById("events").innerHTML = events.map(e => `
+    <tr>
+      <td>${e.time}</td>
+      <td>${e.type}</td>
+      <td>${e.node}</td>
+      <td>${e.message}</td>
+    </tr>
+  `).join("");
+}
+
+loadEvents();
+setInterval(loadEvents, 5000);
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

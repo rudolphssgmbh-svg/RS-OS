@@ -46,3 +46,7 @@ registry-server/events.json
 # Node agent package/build artifacts
 node-agent/work/
 *.rspkg
+
+# Registry server generated/state/security artifacts
+registry-server/data/
+registry-server/keys/
