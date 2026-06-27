@@ -10,6 +10,7 @@ const { handleRsos060VerificationsRoutes } = require("./modules/rsos060/verifica
 const { Pool } = require("pg");
 const jwt = require("jsonwebtoken");
 const { send } = require("./response/send");
+const { createAuditHash } = require("./evidence/audit-hash");
 
 //const ROOT_PUBLIC_KEY = fs.readFileSync(
 //  "/app/keys/root_public.pem",
@@ -301,12 +302,6 @@ async function initDb() {
 }
 
 
-function createAuditHash(payload) {
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify(payload))
-    .digest("hex");
-}
 
 async function writeEvent({
   event_type,
