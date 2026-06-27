@@ -20,6 +20,7 @@ const { handleRuntimeEventsRoute } = require("./routes/events/runtime-events-rou
 const { handleAuditChainVerifyRoute } = require("./routes/events/audit-chain-route");
 const { handleListRuntimeObjectsRoute } = require("./routes/objects/list-objects-route");
 const { handleCreateRuntimeObjectRoute } = require("./routes/objects/create-object-route");
+const { getTraceObject } = require("./trace/providers/object-provider");
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
@@ -10465,16 +10466,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         });
       }
 
-      const objectResult = await db.query(`
-        SELECT *
-        FROM runtime_objects
-        WHERE tenant_id = $1
-          AND object_id = $2
-        LIMIT 1
-      `, [
+      const objectResult = await getTraceObject({
+        db,
         tenant_id,
-        object_id
-      ]);
+        object_id,
+        mode: "full"
+      });
 
       const relationsResult = await db.query(`
         SELECT *
@@ -10671,13 +10668,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         });
       }
 
-      const objectResult = await db.query(`
-        SELECT object_id, runtime_type, state, priority, risk_score, created_at
-        FROM runtime_objects
-        WHERE tenant_id = $1
-          AND object_id = $2
-        LIMIT 1
-      `, [auth.user.tenant_id, object_id]);
+      const objectResult = await getTraceObject({
+        db,
+        tenant_id: auth.user.tenant_id,
+        object_id,
+        mode: "compact"
+      });
 
       const auditResult = await db.query(`
         SELECT COUNT(*)::int AS event_count
