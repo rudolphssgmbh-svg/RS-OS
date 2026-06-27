@@ -14,6 +14,7 @@ const { verifyOperatorSignature, generateToken, verifyToken, requireRole } = req
 const { readBody } = require("./ingress/body");
 const { db } = require("./bootstrap/database");
 const { initDb } = require("./bootstrap/init-db");
+const { handleHealthRoute } = require("./routes/health/health-route");
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
@@ -735,12 +736,7 @@ const server = http.createServer(async (req, res) => {
     // HEALTH
 
     if (req.method === "GET" && path === "/health") {
-
-      return send(res, 200, {
-        status: "ok",
-        runtime: "healthy",
-        database: "connected"
-      });
+      return handleHealthRoute(req, res, send);
     }
 
     // AUTH LOGIN
