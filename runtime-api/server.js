@@ -13,6 +13,7 @@ const { createAuditHash } = require("./evidence/audit-hash");
 const { verifyOperatorSignature, generateToken, verifyToken, requireRole } = require("./verification/auth");
 const { readBody } = require("./ingress/body");
 const { db } = require("./bootstrap/database");
+const { initDb } = require("./bootstrap/init-db");
 
 //const ROOT_PUBLIC_KEY = fs.readFileSync(
 //  "/app/keys/root_public.pem",
@@ -250,49 +251,6 @@ async function executeDefensePipeline(ingress_id) {
   };
 }
 
-async function initDb() {
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS runtime_objects (
-      object_id TEXT PRIMARY KEY,
-      runtime_type TEXT NOT NULL,
-      state TEXT NOT NULL,
-      priority TEXT NOT NULL,
-      risk_score INTEGER NOT NULL,
-      tenant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS runtime_events (
-      event_id TEXT PRIMARY KEY,
-      event_type TEXT NOT NULL,
-      object_id TEXT,
-      message TEXT,
-      audit_hash TEXT,
-      previous_hash TEXT,
-      tenant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS runtime_execution_jobs (
-      job_id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      object_id TEXT NOT NULL,
-      action TEXT NOT NULL,
-      status TEXT NOT NULL,
-      requested_by TEXT,
-      result_message TEXT,
-      started_at TIMESTAMPTZ,
-      completed_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
-  console.log("Database initialized");
-}
 
 
 
