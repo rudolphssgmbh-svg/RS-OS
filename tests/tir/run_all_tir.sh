@@ -14,6 +14,9 @@ echo
 tests/tir/rsos_tir_0111b_feedback_loop.sh
 echo
 
+tests/tir/rsos_tir_0110a_competency_formation.sh
+echo
+
 tests/tir/rsos_tir_0108_adaptation_trigger.sh
 echo
 
