@@ -20,7 +20,7 @@ const { handleRuntimeEventsRoute } = require("./routes/events/runtime-events-rou
 const { handleAuditChainVerifyRoute } = require("./routes/events/audit-chain-route");
 const { handleListRuntimeObjectsRoute } = require("./routes/objects/list-objects-route");
 const { handleCreateRuntimeObjectRoute } = require("./routes/objects/create-object-route");
-const { composeFullTrace } = require("./trace/trace-composer");
+const { handleFullTraceRoute } = require("./routes/trace/full-trace-route");
 const { getTraceObject } = require("./trace/providers/object-provider");
 const { getTraceRelations } = require("./trace/providers/relation-provider");
 const { getTraceAudit } = require("./trace/providers/audit-provider");
@@ -10445,40 +10445,15 @@ if (req.method === "POST" && path === "/runtime/execute") {
 
     // GET FULL OBJECT TRACE
 
-    if (req.method === "GET" && path.startsWith("/runtime/trace/") && path.endsWith("/full")) {
-
-      const auth = requireRole(req, [
-        "system_admin",
-        "runtime_admin",
-        "auditor",
-        "governance"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const object_id = decodeURIComponent(
-        path
-          .replace("/runtime/trace/", "")
-          .replace("/full", "")
-      );
-
-      if (!object_id) {
-        return send(res, 400, {
-          error: "missing_object_id"
-        });
-      }
-
-      const trace = await composeFullTrace({
-        db,
-        tenant_id,
-        object_id
-      });
-
-      return send(res, 200, trace);
+    if (await handleFullTraceRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole
+    })) {
+      return;
     }
 
     // GET UNIFIED OBJECT TRACE
