@@ -28,6 +28,7 @@ const { getTraceExecution } = require("./trace/providers/execution-provider");
 const { getTraceRecommendations } = require("./trace/providers/recommendation-provider");
 const { getTraceOrchestrations } = require("./trace/providers/orchestration-provider");
 const { getTraceTrainingPlans, getTraceLearningEvidence } = require("./trace/providers/learning-provider");
+const { getTraceRisks } = require("./trace/providers/risk-provider");
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
@@ -10526,16 +10527,11 @@ if (req.method === "POST" && path === "/runtime/execute") {
         mode: "full"
       });
 
-      const risksResult = await db.query(`
-        SELECT *
-        FROM runtime_risks
-        WHERE tenant_id = $1
-          AND object_id = $2
-        ORDER BY created_at DESC
-      `, [
+      const risksResult = await getTraceRisks({
+        db,
         tenant_id,
         object_id
-      ]);
+      });
 
       const auditResult = await getTraceAudit({
         db,
