@@ -25,6 +25,7 @@ const { getTraceRelations } = require("./trace/providers/relation-provider");
 const { getTraceAudit } = require("./trace/providers/audit-provider");
 const { getTraceGovernance } = require("./trace/providers/governance-provider");
 const { getTraceExecution } = require("./trace/providers/execution-provider");
+const { getTraceRecommendations } = require("./trace/providers/recommendation-provider");
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
@@ -10484,16 +10485,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         mode: "full"
       });
 
-      const recommendationsResult = await db.query(`
-        SELECT *
-        FROM runtime_recommendations
-        WHERE tenant_id = $1
-          AND object_id = $2
-        ORDER BY created_at DESC
-      `, [
+      const recommendationsResult = await getTraceRecommendations({
+        db,
         tenant_id,
-        object_id
-      ]);
+        object_id,
+        mode: "full"
+      });
 
       const orchestrationsResult = await db.query(`
         SELECT *
@@ -10688,23 +10685,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         mode: "compact"
       });
 
-      const recommendationResult = await db.query(`
-        SELECT
-          recommendation_id,
-          recommendation_type,
-          priority,
-          status,
-          reason,
-          created_at,
-          approved_by,
-          approved_at,
-          executed_job_id,
-          executed_at
-        FROM runtime_recommendations
-        WHERE tenant_id = $1
-          AND object_id = $2
-        ORDER BY created_at DESC
-      `, [auth.user.tenant_id, object_id]);
+      const recommendationResult = await getTraceRecommendations({
+        db,
+        tenant_id: auth.user.tenant_id,
+        object_id,
+        mode: "compact"
+      });
 
       const latestRecommendation =
         recommendationResult.rows.length > 0
