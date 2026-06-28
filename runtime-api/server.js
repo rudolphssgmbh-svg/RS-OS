@@ -24,6 +24,7 @@ const { getTraceObject } = require("./trace/providers/object-provider");
 const { getTraceRelations } = require("./trace/providers/relation-provider");
 const { getTraceAudit } = require("./trace/providers/audit-provider");
 const { getTraceGovernance } = require("./trace/providers/governance-provider");
+const { getTraceExecution } = require("./trace/providers/execution-provider");
 
 async function executeDefensePipeline(ingress_id) {
   const ingressResult = await db.query(`
@@ -10527,16 +10528,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         object_id
       ]);
 
-      const executionJobsResult = await db.query(`
-        SELECT *
-        FROM runtime_execution_jobs
-        WHERE tenant_id = $1
-          AND object_id = $2
-        ORDER BY created_at DESC
-      `, [
+      const executionJobsResult = await getTraceExecution({
+        db,
         tenant_id,
-        object_id
-      ]);
+        object_id,
+        mode: "full"
+      });
 
       const governanceResult = await getTraceGovernance({
         db,
@@ -10677,13 +10674,12 @@ if (req.method === "POST" && path === "/runtime/execute") {
         mode: "compact"
       });
 
-      const executionResult = await db.query(`
-        SELECT status, action AS execution_type, requested_by AS worker_id, created_at, completed_at
-        FROM runtime_execution_jobs
-        WHERE tenant_id = $1
-          AND object_id = $2
-        ORDER BY created_at DESC
-      `, [auth.user.tenant_id, object_id]);
+      const executionResult = await getTraceExecution({
+        db,
+        tenant_id: auth.user.tenant_id,
+        object_id,
+        mode: "compact"
+      });
 
       const relationResult = await getTraceRelations({
         db,
