@@ -1,0 +1,114 @@
+# RSOS Repository Snapshot
+
+Datum: 2026-06-30T09:54:43+00:00
+
+## Git Status
+ M .gitignore
+ M dashboard/audit/audit-report-dashboard.txt
+ M dashboard/backup-health.txt
+ M dashboard/governance/governance-health.txt
+ M dashboard/master/master-dashboard.txt
+ M dashboard/operations/operations-health.txt
+ M dashboard/runtime/runtime-health.txt
+ M dashboard/tenant/tenant-dashboard.txt
+ M dashboard/unified/unified-dashboard.txt
+ M frontend/index.html
+ M knowledge/RSOS-060-ist-zustand-20260614-202049.txt
+?? changelog/
+?? docker/
+?? docs/archive/
+?? docs/engineering/
+?? docs/foundation/
+?? docs/research/
+?? knowledge/build_knowledge_json.sh
+?? knowledge/current/CHECKPOINT_CHARLIE_STATUS.json
+?? knowledge/current/FOUNDATION_AUDIT_REPORT.json
+?? knowledge/current/FOUNDATION_INVENTORY.json
+?? knowledge/current/FOUNDATION_MAP.json
+?? knowledge/current/FOUNDATION_STATUS.json
+?? knowledge/current/FOUNDATION_WITNESS.json
+?? knowledge/current/FOUNDATION_WITNESS.sha256
+?? knowledge/current/PEER_REGISTRY.json
+?? knowledge/current/RECOVERY_STATUS.json
+?? knowledge/current/RECOVERY_TEST_REPORT.json
+?? knowledge/current/SECURE_ACCESS_STATUS.json
+?? knowledge/current/TROJA_STATUS.json
+?? knowledge/current/WITNESS_REGISTRY.json
+?? knowledge/current/check_foundation_integrity.sh
+?? knowledge/current/generate_foundation_hash.sh
+?? knowledge/current/generate_foundation_status.sh
+?? knowledge/current/generate_foundation_witness.sh
+?? knowledge/current/knowledge.json
+?? knowledge/export_snapshot.sh
+?? knowledge/generate_handoff.sh
+?? master
+?? node-agent/
+?? operations/
+?? runtime-api/016_runtime_relations.sql
+?? runtime-api/RSOS-060_IST_ZUSTAND_20260619.md
+?? runtime-api/RSOS-060_MODULARISIERUNG_STATUS_20260619.md
+?? runtime-api/migrations/090_runtime_verification_cycle_result_link.sql
+?? runtime-api/migrations/obsolete/
+
+## Top-Level Repository
+.
+./.git
+./backups
+./changelog
+./configs
+./control-plane
+./core
+./dashboard
+./docker
+./docs
+./event-bus
+./exports
+./frontend
+./frontend.backup.2026-05-24-0938
+./frontend.backup.2026-05-24-0947
+./frontend.backup.package
+./gateway
+./intelligence
+./keys
+./knowledge
+./logs
+./memory
+./modules
+./node-agent
+./operations
+./operators
+./registry-server
+./replay
+./runtime
+./runtime-api
+./runtime-api.backup.2026-05-24-0938
+./runtime-api.backup.2026-05-24-0947
+./runtime-api.backup.2026-05-25
+./runtime-api.backup.package
+./storage
+./tenant
+./tests
+
+## Docs
+docs
+docs/architecture
+docs/archive
+docs/checkpoints
+docs/development
+docs/engineering
+docs/engineering/snapshots
+docs/foundation
+docs/governance
+docs/releases
+docs/research
+docs/standards
+
+## Operations
+operations
+operations/dashboard
+operations/dashboard/.gitkeep
+
+## Git Reference
+
+Branch: feature/RSOS-060-evidence-foundation
+Commit: 009f07ed5fbff99610baf6ff9f8d8e37fad7d7d0
