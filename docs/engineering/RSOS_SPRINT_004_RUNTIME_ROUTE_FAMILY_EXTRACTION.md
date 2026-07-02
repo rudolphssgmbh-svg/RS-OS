@@ -250,3 +250,38 @@ Regression mit JWT:
 Bewertung:
 - Verhaltenserhaltende Extraktion bestaetigt
 - Defense State modularisiert
+
+## Sprint 004D - Incident Dashboard Extraction
+
+Status: Verified
+Datum: 2026-07-02
+
+### Umsetzung
+
+Extrahiert in:
+
+runtime-api/routes/incidents/incident-dashboard-route.js
+
+Aus server.js entfernt:
+- GET /runtime/incidents/metrics
+- GET /runtime/incidents/search
+- GET /runtime/incidents/completeness
+- GET /runtime/incidents/dashboard
+
+### Verifikation
+
+Syntax:
+- node -c runtime-api/server.js: PASS
+- node -c runtime-api/routes/incidents/incident-dashboard-route.js: PASS
+
+Runtime:
+- docker restart rsos-runtime-api: PASS
+- /health: ok, runtime healthy, database connected
+
+Regression:
+- Ohne JWT: alle vier Routen 401 unauthorized
+- Mit JWT: alle vier Routen JSON response PASS
+- GET /runtime/incidents/search ohne q: 400 validation_error PASS
+
+Bewertung:
+- Verhaltenserhaltende Read-only-Extraktion bestaetigt
