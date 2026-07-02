@@ -24,6 +24,7 @@ const { handleFullTraceRoute } = require("./routes/trace/full-trace-route");
 const { handleManagementDashboardRoute } = require("./routes/dashboard/management-dashboard-route");
 const { handleRuntimeDashboardRoute } = require("./routes/dashboard/runtime-dashboard-route");
 const { handleTenantDashboardListRoute } = require("./routes/dashboard/tenant-dashboard-list-route");
+const { handleTenantDashboardDetailRoute } = require("./routes/dashboard/tenant-dashboard-detail-route");
 const { getTraceObject } = require("./trace/providers/object-provider");
 const { getTraceRelations } = require("./trace/providers/relation-provider");
 const { getTraceAudit } = require("./trace/providers/audit-provider");
@@ -12985,6 +12986,19 @@ if (req.method === "POST" && path === "/runtime/execute") {
           details: err.message
         }));
       }
+    }
+
+
+    const handledTenantDashboardDetailRoute = await handleTenantDashboardDetailRoute({
+      req,
+      res,
+      path,
+      db,
+      send
+    });
+
+    if (handledTenantDashboardDetailRoute) {
+      return;
     }
 
 
