@@ -22,6 +22,7 @@ const { handleListRuntimeObjectsRoute } = require("./routes/objects/list-objects
 const { handleCreateRuntimeObjectRoute } = require("./routes/objects/create-object-route");
 const { handleFullTraceRoute } = require("./routes/trace/full-trace-route");
 const { handleManagementDashboardRoute } = require("./routes/dashboard/management-dashboard-route");
+const { handleRuntimeDashboardRoute } = require("./routes/dashboard/runtime-dashboard-route");
 const { getTraceObject } = require("./trace/providers/object-provider");
 const { getTraceRelations } = require("./trace/providers/relation-provider");
 const { getTraceAudit } = require("./trace/providers/audit-provider");
@@ -13553,6 +13554,20 @@ if (req.method === "POST" && path === "/runtime/execute") {
         });
       }
     }
+
+    const handledRuntimeDashboardRoute = await handleRuntimeDashboardRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole
+    });
+
+    if (handledRuntimeDashboardRoute) {
+      return;
+    }
+
 
     if (req.method === "GET" && path === "/runtime/dashboard") {
 
