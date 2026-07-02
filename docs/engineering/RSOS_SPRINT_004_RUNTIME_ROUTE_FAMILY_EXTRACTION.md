@@ -166,3 +166,47 @@ Bewertung:
 - Keine funktionalen Aenderungen beabsichtigt
 - server.js reduziert
 - Learning Dashboard Family modularisiert
+
+## Sprint 004B - Defense Metrics Extraction
+
+Status: Verified
+Datum: 2026-07-02
+
+### Umsetzung
+
+Extrahiert in:
+
+runtime-api/routes/defense/defense-metrics-route.js
+
+Aus server.js entfernt:
+- POST /runtime/defense/metrics/recalculate
+- GET /runtime/defense/metrics
+- GET /runtime/defense/dashboard
+
+In server.js ergaenzt:
+- require handleDefenseMetricsRoute
+- Handler-Aufruf vor /runtime/audit-reports/generate
+
+### Verifikation
+
+Syntax:
+- node -c runtime-api/server.js: PASS
+- node -c runtime-api/routes/defense/defense-metrics-route.js: PASS
+
+Runtime:
+- docker restart rsos-runtime-api: PASS
+- /health: ok, runtime healthy, database connected
+
+Regression ohne JWT:
+- GET /runtime/defense/metrics: 401 unauthorized
+- GET /runtime/defense/dashboard: 401 unauthorized
+
+Regression mit JWT:
+- Login janette / rsos_secure_2026: TOKEN_OK
+- GET /runtime/defense/metrics: JSON response PASS
+- GET /runtime/defense/dashboard: JSON response PASS
+
+Bewertung:
+- Verhaltenserhaltende Extraktion bestaetigt
+- Defense Metrics und Defense Dashboard modularisiert
+- Defense State bleibt separat fuer Sprint 004C
