@@ -23,6 +23,7 @@ const { handleCreateRuntimeObjectRoute } = require("./routes/objects/create-obje
 const { handleFullTraceRoute } = require("./routes/trace/full-trace-route");
 const { handleManagementDashboardRoute } = require("./routes/dashboard/management-dashboard-route");
 const { handleRuntimeDashboardRoute } = require("./routes/dashboard/runtime-dashboard-route");
+const { handleTenantDashboardListRoute } = require("./routes/dashboard/tenant-dashboard-list-route");
 const { getTraceObject } = require("./trace/providers/object-provider");
 const { getTraceRelations } = require("./trace/providers/relation-provider");
 const { getTraceAudit } = require("./trace/providers/audit-provider");
@@ -12870,6 +12871,18 @@ if (req.method === "POST" && path === "/runtime/execute") {
         tenants: result.rows
       });
     }
+
+    const handledTenantDashboardListRoute = await handleTenantDashboardListRoute({
+      req,
+      res,
+      path,
+      db
+    });
+
+    if (handledTenantDashboardListRoute) {
+      return;
+    }
+
 
     // RSOS-047 Tenant Dashboard
     if (req.method === "GET" && path === "/runtime/dashboard/tenants") {
