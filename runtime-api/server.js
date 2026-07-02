@@ -21,6 +21,7 @@ const { handleAuditChainVerifyRoute } = require("./routes/events/audit-chain-rou
 const { handleListRuntimeObjectsRoute } = require("./routes/objects/list-objects-route");
 const { handleCreateRuntimeObjectRoute } = require("./routes/objects/create-object-route");
 const { handleFullTraceRoute } = require("./routes/trace/full-trace-route");
+const { handleManagementDashboardRoute } = require("./routes/dashboard/management-dashboard-route");
 const { getTraceObject } = require("./trace/providers/object-provider");
 const { getTraceRelations } = require("./trace/providers/relation-provider");
 const { getTraceAudit } = require("./trace/providers/audit-provider");
@@ -13504,6 +13505,19 @@ if (req.method === "POST" && path === "/runtime/execute") {
     }
 
     // DASHBOARD
+
+
+    const handledManagementDashboardRoute = await handleManagementDashboardRoute({
+      req,
+      res,
+      path,
+      db,
+      send
+    });
+
+    if (handledManagementDashboardRoute) {
+      return;
+    }
 
 
     // RSOS-047C Global Management Dashboard
