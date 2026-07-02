@@ -210,3 +210,43 @@ Bewertung:
 - Verhaltenserhaltende Extraktion bestaetigt
 - Defense Metrics und Defense Dashboard modularisiert
 - Defense State bleibt separat fuer Sprint 004C
+
+## Sprint 004C - Defense State Extraction
+
+Status: Verified
+Datum: 2026-07-02
+
+### Umsetzung
+
+Extrahiert in:
+
+runtime-api/routes/defense/defense-state-route.js
+
+Aus server.js entfernt:
+- GET /runtime/defense/state
+- POST /runtime/defense/state
+
+In server.js ergaenzt:
+- require handleDefenseStateRoute
+- Handler-Aufruf vor RSOS-076D Learning Runtime API
+
+### Verifikation
+
+Syntax:
+- node -c runtime-api/server.js: PASS
+- node -c runtime-api/routes/defense/defense-state-route.js: PASS
+
+Runtime:
+- docker restart rsos-runtime-api: PASS
+- /health: ok, runtime healthy, database connected
+
+Regression ohne JWT:
+- GET /runtime/defense/state: 401 unauthorized
+
+Regression mit JWT:
+- Login janette / rsos_secure_2026: TOKEN_OK
+- GET /runtime/defense/state: JSON response PASS
+
+Bewertung:
+- Verhaltenserhaltende Extraktion bestaetigt
+- Defense State modularisiert
