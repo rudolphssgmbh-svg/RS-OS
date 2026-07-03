@@ -285,3 +285,42 @@ Regression:
 
 Bewertung:
 - Verhaltenserhaltende Read-only-Extraktion bestaetigt
+
+## Sprint 004E - Incident Registry Extraction
+
+Status: Verified
+Datum: 2026-07-03
+
+### Umsetzung
+
+Extrahiert in:
+
+runtime-api/routes/incidents/incident-registry-route.js
+
+Aus server.js entfernt:
+- GET /runtime/incidents
+- GET /runtime/incidents/:incident_id/summary
+- GET /runtime/incidents/:incident_id
+
+In server.js ergaenzt:
+- require handleIncidentRegistryRoute
+- Handler-Aufruf vor RSOS-060 Evidence Routes
+
+### Verifikation
+
+Syntax:
+- node -c runtime-api/server.js: PASS
+- node -c runtime-api/routes/incidents/incident-registry-route.js: PASS
+
+Runtime:
+- docker restart rsos-runtime-api: PASS
+- /health: ok, runtime healthy, database connected
+
+Regression:
+- Ohne JWT: alle drei Routen 401 unauthorized
+- Mit JWT: GET /runtime/incidents JSON response PASS
+- Missing valid UUID summary: 404 not_found PASS
+- Missing valid UUID detail: 200 with incident null PASS
+
+Bewertung:
+- Verhaltenserhaltende Read-only-Extraktion bestaetigt
