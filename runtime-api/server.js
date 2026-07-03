@@ -33,6 +33,9 @@ const { handleIncidentRegistryRoute } = require("./routes/incidents/incident-reg
 const { handleIncidentCoreRoute } = require("./routes/incidents/incident-core-route");
 const { handleIncidentGovernanceRoute } = require("./routes/incidents/incident-governance-route");
 const { handleReportRoute } = require("./routes/reports/report-route");
+const { handleOutcomeRoute } = require("./routes/outcomes/outcome-route");
+const { handleMeasurementRoute } = require("./routes/measurements/measurement-route");
+const { handleVerificationCycleRoute } = require("./routes/verifications/verification-cycle-route");
 const { getTraceObject } = require("./trace/providers/object-provider");
 const { getTraceRelations } = require("./trace/providers/relation-provider");
 const { getTraceAudit } = require("./trace/providers/audit-provider");
@@ -877,236 +880,35 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && path === "/runtime/outcomes") {
-      const authUser = verifyToken(req);
-      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
+    const handledOutcomeRoute = await handleOutcomeRoute({
+      req,
+      res,
+      path,
+      db,
+      verifyToken,
+      readBody,
+      writeEvent,
+      send
+    });
 
-      const body = await readBody(req);
-
-      const tenant_id = authUser.tenant_id;
-      const object_id = body.object_id || null;
-      const action_id = body.action_id || null;
-      const outcome_type = body.outcome_type;
-      const outcome_title = body.outcome_title;
-      const outcome_description = body.outcome_description || null;
-      const expected_result = body.expected_result || null;
-      const actual_result = body.actual_result || null;
-      const outcome_status = body.outcome_status || "observed";
-      const observed_at = body.observed_at || null;
-      const created_by = authUser.operator_id || authUser.role || "runtime_user";
-
-      if (!tenant_id || !outcome_type || !outcome_title) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id, outcome_type and outcome_title required"
-        });
-      }
-
-      const result = await db.query(`
-        INSERT INTO runtime_outcomes (
-          tenant_id, object_id, action_id, outcome_type, outcome_title,
-          outcome_description, expected_result, actual_result,
-          outcome_status, observed_at, created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10::timestamptz, now()),$11)
-        RETURNING *
-      `, [
-        tenant_id, object_id, action_id, outcome_type, outcome_title,
-        outcome_description, expected_result, actual_result,
-        outcome_status, observed_at, created_by
-      ]);
-
-      await writeEvent({
-        tenant_id,
-        object_id: result.rows[0].outcome_id,
-        event_type: "runtime.outcome.created",
-        message: JSON.stringify({
-          outcome_id: result.rows[0].outcome_id,
-          outcome_type,
-          outcome_title
-        })
-      });
-
-      return send(res, 201, { outcome: result.rows[0] });
+    if (handledOutcomeRoute) {
+      return;
     }
 
-    if (req.method === "GET" && path === "/runtime/outcomes") {
-      const authUser = verifyToken(req);
-      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
+    const handledMeasurementRoute = await handleMeasurementRoute({
+      req,
+      res,
+      path,
+      db,
+      verifyToken,
+      readBody,
+      writeEvent,
+      send
+    });
 
-      const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = authUser.tenant_id;
-
-      const result = await db.query(`
-        SELECT *
-        FROM runtime_outcomes
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-        LIMIT 100
-      `, [tenant_id]);
-
-      return send(res, 200, { outcomes: result.rows });
+    if (handledMeasurementRoute) {
+      return;
     }
-
-    if (req.method === "POST" && path === "/runtime/measurements") {
-      const authUser = verifyToken(req);
-      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
-
-      const body = await readBody(req);
-
-      const tenant_id = authUser.tenant_id;
-      const outcome_id = body.outcome_id || null;
-      const metric_name = body.metric_name;
-      const metric_value = body.metric_value === undefined ? null : body.metric_value;
-      const metric_unit = body.metric_unit || null;
-      const target_value = body.target_value === undefined ? null : body.target_value;
-      const variance_value = body.variance_value === undefined ? null : body.variance_value;
-      const measurement_time = body.measurement_time || null;
-      const created_by = authUser.operator_id || authUser.role || "runtime_user";
-
-      if (!tenant_id || !metric_name) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id and metric_name required"
-        });
-      }
-
-      const result = await db.query(`
-        INSERT INTO runtime_measurements (
-          tenant_id, outcome_id, metric_name, metric_value, metric_unit,
-          target_value, variance_value, measurement_time, created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8::timestamptz, now()),$9)
-        RETURNING *
-      `, [
-        tenant_id, outcome_id, metric_name, metric_value, metric_unit,
-        target_value, variance_value, measurement_time, created_by
-      ]);
-
-      await writeEvent({
-        tenant_id,
-        object_id: result.rows[0].measurement_id,
-        event_type: "runtime.measurement.created",
-        message: JSON.stringify({
-          measurement_id: result.rows[0].measurement_id,
-          outcome_id,
-          metric_name,
-          metric_value,
-          metric_unit
-        })
-      });
-
-      // RSOS-060H automatic measurement verification cycle
-      const autoCycle = await db.query(`
-        INSERT INTO runtime_verification_cycles (
-          tenant_id,
-          measurement_id,
-          verification_type,
-          verification_status,
-          expected_value,
-          observed_value,
-          verification_result,
-          confidence_before,
-          confidence_after,
-          created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-        RETURNING *
-      `, [
-        tenant_id,
-        result.rows[0].measurement_id,
-        "measurement_auto_verification",
-        "pending",
-        "Measurement requires verification",
-        "Measurement created",
-        "awaiting verification",
-        50,
-        50,
-        created_by
-      ]);
-
-      await db.query(`
-        INSERT INTO runtime_verification_checks (
-          tenant_id,
-          measurement_id,
-          verification_cycle_id,
-          check_type,
-          check_status,
-          expected_value,
-          observed_value,
-          check_notes,
-          checked_at,
-          checked_by,
-          created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now(),$9,$9)
-      `, [
-        tenant_id,
-        result.rows[0].measurement_id,
-        autoCycle.rows[0].verification_id,
-        "measurement_created",
-        "pending",
-        "Measurement should be verified",
-        "Measurement created",
-        "Automatic RSOS-060H trigger",
-        created_by
-      ]);
-
-      await writeEvent({
-        tenant_id,
-        object_id: result.rows[0].measurement_id,
-        event_type: "runtime.verification.cycle.auto_created",
-        message: JSON.stringify({
-          measurement_id: result.rows[0].measurement_id,
-          verification_id: autoCycle.rows[0].verification_id,
-          verification_type: "measurement_auto_verification",
-          verification_status: "pending"
-        })
-      });
-
-      await writeEvent({
-        tenant_id,
-        object_id: result.rows[0].measurement_id,
-        event_type: "runtime.verification.check.auto_created",
-        message: JSON.stringify({
-          measurement_id: result.rows[0].measurement_id,
-          verification_id: autoCycle.rows[0].verification_id,
-          check_type: "measurement_created",
-          check_status: "pending"
-        })
-      });
-
-      return send(res, 201, { measurement: result.rows[0] });
-    }
-
-    if (req.method === "GET" && path === "/runtime/measurements") {
-      const authUser = verifyToken(req);
-      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
-
-      const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = authUser.tenant_id;
-      const outcome_id = urlObj.searchParams.get("outcome_id");
-
-      let query = `
-        SELECT *
-        FROM runtime_measurements
-        WHERE tenant_id = $1
-      `;
-      const params = [tenant_id];
-
-      if (outcome_id) {
-        params.push(outcome_id);
-        query += " AND outcome_id = $" + params.length;
-      }
-
-      query += " ORDER BY created_at DESC LIMIT 100";
-
-      const result = await db.query(query, params);
-
-      return send(res, 200, { measurements: result.rows });
-    }
-
-
 
     const rsos060WitnessObservationsHandled = await handleRsos060WitnessObservationsRoutes({
       req,
@@ -1158,121 +960,19 @@ const server = http.createServer(async (req, res) => {
       return rsos060VerificationsHandled;
     }
 
-    if (req.method === "POST" && path === "/runtime/verification-cycles") {
-      const authUser = verifyToken(req);
-      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
+    const handledVerificationCycleRoute = await handleVerificationCycleRoute({
+      req,
+      res,
+      path,
+      db,
+      verifyToken,
+      readBody,
+      writeEvent,
+      send
+    });
 
-      const body = await readBody(req);
-
-      const tenant_id = authUser.tenant_id;
-      const outcome_id = body.outcome_id || null;
-      const measurement_id = body.measurement_id || null;
-      const hypothesis_id = body.hypothesis_id || null;
-      const assumption_id = body.assumption_id || null;
-      const fact_id = body.fact_id || null;
-      const verification_type = body.verification_type;
-      const verification_status = body.verification_status || "pending";
-      const expected_value = body.expected_value || null;
-      const observed_value = body.observed_value || null;
-      const verification_result = body.verification_result || null;
-      const confidence_before = body.confidence_before === undefined ? null : body.confidence_before;
-      const confidence_after = body.confidence_after === undefined ? null : body.confidence_after;
-      const verified_at = body.verified_at || null;
-      const created_by = authUser.operator_id || authUser.role || "runtime_user";
-
-      if (!tenant_id || !verification_type) {
-        return send(res, 400, {
-          error: "validation_error",
-          message: "tenant_id and verification_type required"
-        });
-      }
-
-      const result = await db.query(`
-        INSERT INTO runtime_verification_cycles (
-          tenant_id,
-          outcome_id,
-          measurement_id,
-          hypothesis_id,
-          assumption_id,
-          fact_id,
-          verification_type,
-          verification_status,
-          expected_value,
-          observed_value,
-          verification_result,
-          confidence_before,
-          confidence_after,
-          verified_at,
-          created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE($14::timestamptz, NULL),$15)
-        RETURNING *
-      `, [
-        tenant_id,
-        outcome_id,
-        measurement_id,
-        hypothesis_id,
-        assumption_id,
-        fact_id,
-        verification_type,
-        verification_status,
-        expected_value,
-        observed_value,
-        verification_result,
-        confidence_before,
-        confidence_after,
-        verified_at,
-        created_by
-      ]);
-
-      await writeEvent({
-        tenant_id,
-        object_id: result.rows[0].verification_id,
-        event_type: "runtime.verification_cycle.created",
-        message: JSON.stringify({
-          verification_id: result.rows[0].verification_id,
-          outcome_id,
-          measurement_id,
-          verification_type,
-          verification_status,
-          verification_result
-        })
-      });
-
-      return send(res, 201, { verification_cycle: result.rows[0] });
-    }
-
-    if (req.method === "GET" && path === "/runtime/verification-cycles") {
-      const authUser = verifyToken(req);
-      if (!authUser) return send(res, 401, { error: "unauthorized", message: "JWT token required" });
-
-      const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = authUser.tenant_id;
-      const outcome_id = urlObj.searchParams.get("outcome_id");
-      const measurement_id = urlObj.searchParams.get("measurement_id");
-
-      let query = `
-        SELECT *
-        FROM runtime_verification_cycles
-        WHERE tenant_id = $1
-      `;
-      const params = [tenant_id];
-
-      if (outcome_id) {
-        params.push(outcome_id);
-        query += " AND outcome_id = $" + params.length;
-      }
-
-      if (measurement_id) {
-        params.push(measurement_id);
-        query += " AND measurement_id = $" + params.length;
-      }
-
-      query += " ORDER BY created_at DESC LIMIT 100";
-
-      const result = await db.query(query, params);
-
-      return send(res, 200, { verification_cycles: result.rows });
+    if (handledVerificationCycleRoute) {
+      return;
     }
 
 
