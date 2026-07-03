@@ -324,3 +324,46 @@ Regression:
 
 Bewertung:
 - Verhaltenserhaltende Read-only-Extraktion bestaetigt
+
+## Sprint 004F - Incident Core Workflow Extraction
+
+Status: Verified
+Datum: 2026-07-03
+
+### Umsetzung
+
+Extrahiert in:
+
+runtime-api/routes/incidents/incident-core-route.js
+
+Aus server.js entfernt:
+- POST /runtime/incidents
+- POST /runtime/incidents/:incident_id/links
+- PATCH /runtime/incidents/:incident_id/status
+- GET /runtime/incidents/:incident_id/timeline
+- POST /runtime/incidents/:incident_id/lessons
+- GET /runtime/incidents/:incident_id/lessons
+
+In server.js ergaenzt:
+- require handleIncidentCoreRoute
+- Handler-Aufruf vor RSOS-073D Incident Governance Completeness
+
+### Verifikation
+
+Syntax:
+- node -c runtime-api/server.js: PASS
+- node -c runtime-api/routes/incidents/incident-core-route.js: PASS
+
+Runtime:
+- docker restart rsos-runtime-api: PASS
+- /health: ok, runtime healthy, database connected
+
+Regression:
+- Ohne JWT: alle sechs Routen 401 unauthorized
+- Mit JWT: timeline missing incident 404 not_found PASS
+- Mit JWT: lessons missing incident 200 with empty lessons PASS
+- Mit JWT: invalid status 400 validation_error PASS
+
+Bewertung:
+- Verhaltenserhaltende Core-Workflow-Extraktion bestaetigt
+- Incident Governance bleibt separat
