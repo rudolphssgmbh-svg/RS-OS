@@ -367,3 +367,47 @@ Regression:
 Bewertung:
 - Verhaltenserhaltende Core-Workflow-Extraktion bestaetigt
 - Incident Governance bleibt separat
+
+## Sprint 004G - Incident Governance Extraction
+
+Status: Verified with pre-existing schema gap
+Datum: 2026-07-03
+
+### Umsetzung
+
+Extrahiert in:
+
+runtime-api/routes/incidents/incident-governance-route.js
+
+Aus server.js entfernt:
+- GET /runtime/incidents/:incident_id/governance/completeness
+- POST /runtime/incidents/:incident_id/residual-risk
+- POST /runtime/incidents/:incident_id/governance-approval
+- POST /runtime/incidents/:incident_id/governance-review
+- GET /runtime/incidents/:incident_id/governance
+
+In server.js ergaenzt:
+- require handleIncidentGovernanceRoute
+- Handler-Aufruf vor Incident Dashboard Route
+
+### Verifikation
+
+Syntax:
+- node -c runtime-api/server.js: PASS
+- node -c runtime-api/routes/incidents/incident-governance-route.js: PASS
+
+Runtime:
+- docker restart rsos-runtime-api: PASS
+- /health: ok, runtime healthy, database connected
+
+Regression:
+- Ohne JWT: alle fuenf Routen 401 unauthorized
+- Mit JWT: completeness missing incident 404 not_found PASS
+- Mit JWT: governance-review missing incident 404 not_found PASS
+- Mit JWT: residual-risk missing incident 404 not_found PASS
+- Mit JWT: governance view exposed existing schema gap: relation runtime_governance_approvals does not exist
+
+Bewertung:
+- Verhaltenserhaltende Extraktion bestaetigt
+- Keine funktionale Aenderung vorgenommen
+- Schema-Luecke separat behandeln, nicht in dieser Extraktion
