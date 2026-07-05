@@ -35,6 +35,7 @@ const { handleRuntimeMetricsRoute } = require("./routes/metrics/runtime-metrics-
 const { handleDeadLetterRoute } = require("./routes/dead-letter/dead-letter-route");
 const { handleWorkflowStateRoute } = require("./routes/workflows/workflow-state-route");
 const { handleDefenseIngressRoute } = require("./routes/defense/defense-ingress-route");
+const { handleDefenseIngressReadRoute } = require("./routes/defense/defense-ingress-read-route");
 const { handleLearningDashboardRoute } = require("./routes/dashboard/learning-dashboard-route");
 const { handleDefenseMetricsRoute } = require("./routes/defense/defense-metrics-route");
 const { handleDefenseStateRoute } = require("./routes/defense/defense-state-route");
@@ -1983,34 +1984,21 @@ if (req.method === "POST" && path === "/runtime/execute") {
       return;
     }
 
-    // RSOS-066B RUNTIME DEFENSE LAYER
 
-    if (req.method === "GET" && path === "/runtime/defense/ingress") {
-      const auth = requireRole(req, [
-        "system_admin",
-        "runtime_admin",
-        "operator",
-        "auditor"
-      ]);
+    const handledDefenseIngressReadRoute = await handleDefenseIngressReadRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole
+    });
 
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const result = await db.query(`
-        SELECT *
-        FROM runtime_ingress_events
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-        LIMIT 100
-      `, [tenant_id]);
-
-      return send(res, 200, {
-        ingress_events: result.rows
-      });
+    if (handledDefenseIngressReadRoute) {
+      return;
     }
+
+    // RSOS-066B RUNTIME DEFENSE LAYER
 
     if (req.method === "POST" && path === "/runtime/defense/shadow-validations") {
       const auth = requireRole(req, [
