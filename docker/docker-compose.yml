@@ -1,0 +1,45 @@
+services:
+  rsos-postgres:
+    image: postgres:16
+    container_name: rsos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rsos
+      POSTGRES_PASSWORD: rsos_secure_2026
+      POSTGRES_DB: rsos_runtime
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - rsos_postgres:/var/lib/postgresql/data
+    networks:
+      - rsos_default
+
+  rsos-redis:
+    image: redis:7
+    container_name: rsos-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - rsos_redis:/data
+    networks:
+      - rsos_default
+
+  rsos-runtime-api:
+    image: rsos-runtime-api
+    container_name: rsos-runtime-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - rsos_default
+
+volumes:
+  rsos_postgres:
+    external: true
+  rsos_redis:
+    external: true
+
+networks:
+  rsos_default:
+    external: true
