@@ -52,6 +52,7 @@ const { handleDefenseRecoveryRequestsExecuteRoute } = require("./routes/defense/
 const { handleDefenseRecoveryVerificationsCoreRoute } = require("./routes/defense/defense-recovery-verifications-core-route");
 const { handleDefenseRecoveryVerificationsCloseRoute } = require("./routes/defense/defense-recovery-verifications-close-route");
 const { handleDefenseAuditReportsCoreRoute } = require("./routes/defense/defense-audit-reports-core-route");
+const { handleDefenseAuditReportsDetailRoute } = require("./routes/defense/defense-audit-reports-detail-route");
 const { handleLearningDashboardRoute } = require("./routes/dashboard/learning-dashboard-route");
 const { handleDefenseMetricsRoute } = require("./routes/defense/defense-metrics-route");
 const { handleDefenseStateRoute } = require("./routes/defense/defense-state-route");
@@ -2277,41 +2278,17 @@ if (req.method === "POST" && path === "/runtime/execute") {
       return;
     }
 
-    if (req.method === "GET" && path.startsWith("/runtime/audit-reports/")) {
-      const auth = requireRole(req, [
-        "system_admin",
-        "runtime_admin",
-        "auditor"
-      ]);
+    const handledDefenseAuditReportsDetailRoute = await handleDefenseAuditReportsDetailRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole
+    });
 
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const report_id = path.replace("/runtime/audit-reports/", "");
-      const tenant_id = auth.user.tenant_id;
-
-      const result = await db.query(`
-        SELECT *
-        FROM runtime_audit_reports
-        WHERE report_id = $1
-          AND tenant_id = $2
-        LIMIT 1
-      `, [
-        report_id,
-        tenant_id
-      ]);
-
-      if (result.rows.length === 0) {
-        return send(res, 404, {
-          error: "not_found",
-          message: "audit report not found"
-        });
-      }
-
-      return send(res, 200, {
-        audit_report: result.rows[0]
-      });
+    if (handledDefenseAuditReportsDetailRoute) {
+      return;
     }
 
     const handledDefenseStateRoute = await handleDefenseStateRoute({
