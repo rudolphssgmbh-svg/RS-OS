@@ -1,0 +1,23 @@
+{
+  "troja_version": "foundation-017a",
+  "timestamp": "2026-06-08T00:00:00Z",
+
+  "status": "design_only",
+
+  "mode": "shadow_injection_only",
+
+  "live_sensor_mutation": false,
+
+  "execution_permission_blocked_during_test": true,
+
+  "last_test": null,
+
+  "drift_detection": "enabled_when_active",
+
+  "notes": [
+    "Troja protocol not yet operational",
+    "Shadow injection only",
+    "Audit mandatory",
+    "Recovery path mandatory"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "registry_version": "1.0",
+  "timestamp": "2026-06-08T00:00:00Z",
+  "witnesses": [
+    {
+      "witness_id": "RSOS-WITNESS-01",
+      "type": "external-usb",
+      "status": "registered",
+      "signature_capable": false,
+      "public_key_registered": false,
+      "owner": "administrator",
+      "notes": "Certified external witness medium"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "map_version": "foundation-016a",
+  "timestamp": "2026-06-08T00:00:00Z",
+
+  "nodes": {
+
+    "foundation_status": {
+      "role": "state"
+    },
+
+    "foundation_witness": {
+      "role": "evidence",
+      "depends_on": [
+        "foundation_status"
+      ]
+    },
+
+    "foundation_hash": {
+      "role": "integrity",
+      "depends_on": [
+        "foundation_witness"
+      ]
+    },
+
+    "foundation_inventory": {
+      "role": "inventory",
+      "depends_on": [
+        "foundation_status"
+      ]
+    },
+
+    "foundation_audit_report": {
+      "role": "assessment",
+      "depends_on": [
+        "foundation_status",
+        "foundation_witness",
+        "foundation_inventory"
+      ]
+    },
+
+    "recovery_status": {
+      "role": "recovery",
+      "depends_on": [
+        "foundation_inventory",
+        "foundation_audit_report"
+      ]
+    },
+
+    "recovery_test_report": {
+      "role": "verification",
+      "depends_on": [
+        "recovery_status"
+      ]
+    }
+  }
+}

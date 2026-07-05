@@ -1,0 +1,19 @@
+{
+  "inventory_version": "1.0",
+  "timestamp": "2026-06-08T00:00:00Z",
+  "artifacts": [
+    "CHATGPT_HANDOFF.md",
+    "CHECKPOINT_CHARLIE_STATUS.json",
+    "FOUNDATION_AUDIT_REPORT.json",
+    "FOUNDATION_MAP.json",
+    "FOUNDATION_STATUS.json",
+    "FOUNDATION_WITNESS.json",
+    "FOUNDATION_WITNESS.sha256",
+    "PEER_REGISTRY.json",
+    "RECOVERY_STATUS.json",
+    "RECOVERY_TEST_REPORT.json",
+    "SECURE_ACCESS_STATUS.json",
+    "TROJA_STATUS.json",
+    "WITNESS_REGISTRY.json"
+  ]
+}

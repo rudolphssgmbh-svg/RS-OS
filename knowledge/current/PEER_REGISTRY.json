@@ -1,0 +1,15 @@
+{
+  "registry_version": "1.0",
+  "timestamp": "2026-06-08T00:00:00Z",
+  "peers": [
+    {
+      "peer_id": "RSOS-WITNESS-01-LAPTOP",
+      "role": "administrator",
+      "status": "active",
+      "trust_level": "high",
+      "vpn_enabled": false,
+      "registered_by": "manual",
+      "notes": "Primary administration device"
+    }
+  ]
+}
