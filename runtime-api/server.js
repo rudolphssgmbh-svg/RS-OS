@@ -74,6 +74,8 @@ const { handleGovernancePolicyRoute } = require("./routes/governance/governance-
 const { handleOrchestrationRoute } = require("./routes/orchestrations/orchestration-route");
 const { handleCommunicationRoute } = require("./routes/communications/communication-route");
 const { handleTrainingLearningRoute } = require("./routes/training/training-learning-route");
+const { handleTrainingGapGeneratorRoute } = require("./routes/training/training-gap-generator-route");
+const { handleRecommendationGapGeneratorRoute } = require("./routes/recommendations/recommendation-gap-generator-route");
 const { handleRecommendationRoute } = require("./routes/recommendations/recommendation-route");
 const { handleTenantRuntimeRoute } = require("./routes/tenants/tenant-runtime-route");
 const { handleTenantAdminRoute } = require("./routes/tenants/tenant-admin-route");
@@ -1290,99 +1292,18 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // RSOS-049C Training Plan Generator
-    if (req.method === "POST" && path === "/runtime/training-plans/generate-from-gaps") {
+    const handledTrainingGapGeneratorRoute = await handleTrainingGapGeneratorRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole,
+      writeEvent
+    });
 
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "auditor"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const gapResult = await db.query(`
-        SELECT
-          person_id,
-          competency_name,
-          gap
-        FROM runtime_competencies
-        WHERE tenant_id = $1
-          AND gap >= 3
-        ORDER BY gap DESC
-      `, [tenant_id]);
-
-      const durationMap = {
-        "Sachkunde §34a": 2400,
-        "Unterrichtung §34a": 240,
-        "Brandschutzhelfer": 240,
-        "Erste Hilfe": 480,
-        "AEVO": 1920,
-        "GSSK": 3200,
-        "FSS": 2400,
-        "Meister Schutz und Sicherheit": 12000
-      };
-
-      const createdPlans = [];
-
-      for (const row of gapResult.rows) {
-
-        const training_plan_id =
-          "tp-" + Date.now() + "-" +
-          Math.random().toString(36).substring(2,8);
-
-        const duration =
-          durationMap[row.competency_name] || 480;
-
-        await db.query(`
-          INSERT INTO runtime_training_plans (
-            training_plan_id,
-            tenant_id,
-            person_id,
-            competency_name,
-            training_type,
-            estimated_duration_minutes,
-            status,
-            created_by
-          )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        `, [
-          training_plan_id,
-          tenant_id,
-          row.person_id,
-          row.competency_name,
-          "gap_closure",
-          duration,
-          "planned",
-          auth.user.operator_id
-        ]);
-
-        createdPlans.push({
-          training_plan_id,
-          person_id: row.person_id,
-          competency_name: row.competency_name,
-          gap: row.gap,
-          estimated_duration_minutes: duration
-        });
-      }
-
-      await writeEvent({
-        event_type: "runtime.training_plans.generated",
-        tenant_id,
-        message:
-          "Generated " +
-          createdPlans.length +
-          " training plans"
-      });
-
-      return send(res, 200, {
-        tenant_id,
-        generated: createdPlans.length,
-        training_plans: createdPlans
-      });
+    if (handledTrainingGapGeneratorRoute) {
+      return;
     }
 
 
@@ -1400,133 +1321,19 @@ const server = http.createServer(async (req, res) => {
     }
 
 
-    // RSOS-049F Generate Recommendations From Competency Gaps
-    if (req.method === "POST" && path === "/runtime/recommendations/generate-from-gaps") {
+    const handledRecommendationGapGeneratorRoute = await handleRecommendationGapGeneratorRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole,
+      writeEvent
+    });
 
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "governance"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-      const tenant_id = auth.user.tenant_id;
-
-      const gapResult = await db.query(`
-        SELECT
-          person_id,
-          competency_name,
-          required_level,
-          actual_level,
-          gap
-        FROM runtime_competencies
-        WHERE tenant_id = $1
-          AND gap >= 3
-        ORDER BY gap DESC, competency_name ASC
-      `, [tenant_id]);
-
-      const inserted = [];
-      const skipped_duplicates = [];
-
-      for (const gap of gapResult.rows) {
-        const recommendation_type = "TRAINING_REQUIRED";
-        const object_id = gap.person_id;
-        const priority = gap.gap >= 5 ? "high" : "normal";
-
-        const existingResult = await db.query(`
-          SELECT recommendation_id
-          FROM runtime_recommendations
-          WHERE tenant_id = $1
-            AND object_id = $2
-            AND recommendation_type = $3
-            AND status = 'open'
-            AND evidence->>'competency_name' = $4
-          LIMIT 1
-        `, [
-          tenant_id,
-          object_id,
-          recommendation_type,
-          gap.competency_name
-        ]);
-
-        if (existingResult.rows.length > 0) {
-          skipped_duplicates.push({
-            person_id: object_id,
-            competency_name: gap.competency_name,
-            existing_recommendation_id: existingResult.rows[0].recommendation_id
-          });
-          continue;
-        }
-
-        const recommendation_id =
-          "rec-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-
-        const evidence = {
-          source: "competency_gap",
-          person_id: gap.person_id,
-          competency_name: gap.competency_name,
-          required_level: gap.required_level,
-          actual_level: gap.actual_level,
-          gap: gap.gap
-        };
-
-        await db.query(`
-          INSERT INTO runtime_recommendations (
-            recommendation_id,
-            tenant_id,
-            object_id,
-            recommendation_type,
-            priority,
-            status,
-            reason,
-            evidence,
-            created_by
-          )
-          VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8)
-        `, [
-          recommendation_id,
-          tenant_id,
-          object_id,
-          recommendation_type,
-          priority,
-          "Competency gap detected; training should be planned.",
-          JSON.stringify(evidence),
-          auth.user.operator_id || auth.user.username || "runtime_admin"
-        ]);
-
-        inserted.push({
-          recommendation_id,
-          person_id: object_id,
-          competency_name: gap.competency_name,
-          recommendation_type,
-          priority,
-          gap: gap.gap
-        });
-      }
-
-      await writeEvent({
-        event_type: "runtime.recommendations.generated_from_competency_gaps",
-        tenant_id,
-        message:
-          "Generated " +
-          inserted.length +
-          " competency gap recommendations"
-      });
-
-      return send(res, 200, {
-        tenant_id,
-        generated: inserted.length,
-        skipped_duplicates: skipped_duplicates.length,
-        recommendations: inserted,
-        duplicates: skipped_duplicates
-      });
+    if (handledRecommendationGapGeneratorRoute) {
+      return;
     }
-
-
-
-
 
 
     const handledKnowledgeRoute = await handleKnowledgeRoute({
