@@ -2,393 +2,485 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <title>RS OS Control Plane</title>
+  <title>RS OS Tenant Control Center</title>
   <style>
-    body { font-family: Arial, sans-serif; background:#f4f6f8; padding:24px; color:#111827; }
-    button { background:#111827; color:white; border:0; padding:10px 14px; border-radius:8px; cursor:pointer; margin:4px; }
-    input, select { padding:10px; border:1px solid #d1d5db; border-radius:8px; margin:4px; min-width:240px; }
-    .card { background:white; padding:16px; border-radius:12px; margin:14px 0; box-shadow:0 2px 8px rgba(0,0,0,.08); }
-    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
-    pre { background:#111827; color:#d1d5db; padding:14px; border-radius:8px; overflow:auto; }
-    .ok { color:green; font-weight:bold; }
-    .bad { color:#b91c1c; font-weight:bold; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f6f8;
+      color: #111827;
+      margin: 0;
+      padding: 24px;
+    }
+    h1, h2, h3 { margin-top: 0; }
+    input, select {
+      padding: 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      margin: 4px;
+      min-width: 240px;
+    }
+    button {
+      background: #111827;
+      color: white;
+      border: 0;
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 4px;
+    }
+    button.secondary { background: #374151; }
+    button.danger { background: #991b1b; }
+    .card {
+      background: white;
+      padding: 16px;
+      border-radius: 12px;
+      margin: 14px 0;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit,minmax(220px,1fr));
+      gap: 14px;
+    }
+    .metric {
+      background: #f9fafb;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid #e5e7eb;
+    }
+    .metric strong {
+      display: block;
+      font-size: 24px;
+      margin-top: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      background: white;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 8px;
+      vertical-align: top;
+    }
+    tr:hover { background: #f9fafb; }
+    pre {
+      background: #111827;
+      color: #d1d5db;
+      padding: 14px;
+      border-radius: 8px;
+      overflow: auto;
+      max-height: 420px;
+    }
+    .ok { color: green; font-weight: bold; }
+    .bad { color: #b91c1c; font-weight: bold; }
+    .muted { color: #6b7280; }
   </style>
 </head>
 <body>
 
-<h1>RS OS Control Plane</h1>
-<p>Secure Runtime Console</p>
+<h1>RS OS Tenant Control Center</h1>
+<p class="muted">Verwaltungsportal für Tenants, Mitglieder, Credentials und Runtime-Status.</p>
 
 <div class="card">
-  <h2>Operator Login</h2>
-  <input id="username" value="janette" placeholder="Username">
-  <input id="password" type="password" value="rsos2026" placeholder="Password">
+  <h2>Login</h2>
+  <input id="username" value="janette" placeholder="Benutzername">
+  <input id="password" type="password" value="rsos_secure_2026" placeholder="Passwort">
   <button onclick="login()">Login</button>
-  <button onclick="logout()">Logout</button>
+  <button class="secondary" onclick="logout()">Logout</button>
   <p id="authState" class="bad">Nicht angemeldet</p>
 </div>
 
 <div class="card">
-  <button onclick="loadDashboard()">Dashboard laden</button>
-  <button onclick="loadObjects()">Objekte laden</button>
-  <button onclick="loadEvents()">Events laden</button>
-<button onclick="loadExecutionIntelligence()">Execution Intelligence</button>
-<button onclick="loadVision()">Vision Layer</button>
+  <h2>Aktionen</h2>
+  <button onclick="loadDashboard()">Global Dashboard</button>
+  <button onclick="loadTenants()">Tenants laden</button>
 </div>
 
 <div class="card">
-  <h2>Objekt Control View</h2>
-  <input id="objectId" value="obj-risk-0001">
-  <button onclick="loadControl()">Control</button>
-  <button onclick="loadReplay()">Replay</button>
-  <button onclick="loadRecovery()">Recovery</button>
+  <h2>Global Dashboard</h2>
+  <div id="summaryGrid" class="grid"></div>
 </div>
 
 <div class="card">
-  <h2>Action Panel</h2>
-
-  <h3>1. Runtime Object anlegen</h3>
-  <input id="newObjectId" value="obj-live-0001">
-  <input id="runtimeType" value="runtime.object.repair_order">
-  <select id="state">
-    <option>created</option>
-    <option>diagnosis</option>
-    <option>customer_approval</option>
-    <option>repair</option>
-    <option>qm_review</option>
-    <option>invoice</option>
-  </select>
-  <input id="priority" value="normal">
-  <input id="riskScore" type="number" value="25">
-  <button onclick="createObject()">Object erstellen</button>
-
-  <h3>2. Transition ausführen</h3>
-  <input id="transitionObjectId" value="obj-live-0001">
-  <select id="toState">
-    <option>diagnosis</option>
-    <option>customer_approval</option>
-    <option>repair</option>
-    <option>qm_review</option>
-    <option>invoice</option>
-    <option>completed</option>
-  </select>
-  <button onclick="transitionObject()">Transition</button>
-
-  <h3>3. Governance Approval</h3>
-  <input id="approvalObjectId" value="obj-risk-0001">
-  <input id="approvalReason" value="approved via frontend JWT">
-<button id="approveBtn" onclick="approveObject()">Approve</button>
-  <h3>4. QM Review</h3>
-  <input id="qmObjectId" value="obj-risk-0001">
-  <input id="reviewer" value="janette">
-  <select id="qmStatus">
-    <option>passed</option>
-    <option>failed</option>
-  </select>
-  <input id="qmNotes" value="Repair checked and documented">
-<button id="qmBtn" onclick="qmReview()">QM Review</button>
-  <h3>5. Invoice</h3>
-  <input id="invoiceObjectId" value="obj-risk-0001">
-  <input id="invoiceNumber" value="RE-2026-0003">
-  <input id="amount" type="number" value="849.90">
-  <input id="currency" value="EUR">
-  <input id="issuedBy" value="janette">
-  <input id="invoiceNotes" value="Repair completed after QM review">
-<button id="invoiceBtn" onclick="createInvoice()">Invoice</button>
-  <h3>6. Complete</h3>
-  <input id="completeObjectId" value="obj-risk-0001">
-  <input id="completedBy" value="janette">
-  <input id="closingNotes" value="Runtime successfully completed">
-
-<button id="completeBtn" onclick="completeObject()">Complete</button>
+  <h2>Tenants</h2>
+  <div id="tenantTable"></div>
 </div>
 
-<div id="summary" class="grid"></div>
+<div class="card">
+  <h2>Tenant Detail</h2>
+  <input id="tenantDetailId" placeholder="tenant_id">
+  <button onclick="loadTenantDetail()">Tenant Detail laden</button>
+  <div id="tenantDetail"></div>
+</div>
 
-<h2>Ausgabe</h2>
-<pre id="output">Bereit.</pre>
+<div class="card">
+  <h2>Tenant anlegen</h2>
+  <input id="newTenantId" placeholder="tenant-demo">
+  <input id="newTenantName" placeholder="Demo GmbH">
+  <input id="newTenantType" placeholder="demo">
+  <input id="newOwnerName" placeholder="Owner Name">
+  <input id="newOwnerEmail" placeholder="owner@example.de">
+  <input id="newDomainName" placeholder="demo.example.de">
+  <button onclick="createTenant()">Tenant erstellen</button>
+</div>
+
+<div class="card">
+  <h2>Member anlegen</h2>
+  <input id="memberTenantId" placeholder="tenant_id">
+  <input id="memberUsername" placeholder="username">
+  <input id="memberDisplayName" placeholder="Display Name">
+  <input id="memberEmail" placeholder="email@example.de">
+  <select id="memberRole">
+    <option value="tenant_admin">tenant_admin</option>
+    <option value="operator">operator</option>
+    <option value="auditor">auditor</option>
+  </select>
+  <button onclick="createMember()">Member erstellen</button>
+</div>
+
+<div class="card">
+  <h2>Credential anlegen</h2>
+  <input id="credentialTenantId" placeholder="tenant_id">
+  <input id="credentialUsername" placeholder="username">
+  <input id="credentialPassword" type="password" value="rsos_secure_2026" placeholder="Passwort">
+  <select id="credentialScope">
+    <option value="tenant">tenant</option>
+  </select>
+  <button onclick="createCredential()">Credential erstellen</button>
+</div>
+
+<div class="card">
+  <h2>Antwort / Debug</h2>
+  <pre id="output">{}</pre>
+</div>
 
 <script>
-const API = "https://api.rudolph-buchhaltung.de";
+const API_BASE = "";
+let token = localStorage.getItem("rsos_token") || null;
 
-function getToken() {
-  return localStorage.getItem("rsos_token");
-}
-
-
-function getOperator() {
-  const raw = localStorage.getItem("rsos_operator");
-  return raw ? JSON.parse(raw) : null;
-}
-
-function setAuthState() {
-  const token = getToken();
-  const operator = getOperator();
-  const authState = document.getElementById("authState");
-
-  if (token && operator) {
-    authState.textContent = "Angemeldet - " + operator.operator_id + " / " + operator.role;
-    authState.className = "ok";
-  } else {
-    authState.textContent = "Nicht angemeldet";
-    authState.className = "bad";
-  }
-
-  applyRolePermissions();
-}
-
-
-
-function show(data) {
+function setOutput(data) {
   document.getElementById("output").textContent = JSON.stringify(data, null, 2);
 }
 
-async function login() {
-  const res = await fetch(API + "/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      username: document.getElementById("username").value,
-      password: document.getElementById("password").value
-    })
-  });
+function setAuthState(operator) {
+  const el = document.getElementById("authState");
+  if (!token) {
+    el.textContent = "Nicht angemeldet";
+    el.className = "bad";
+    return;
+  }
+  el.textContent = operator
+    ? `Angemeldet: ${operator.operator_id} | ${operator.role} | ${operator.scope}`
+    : "Angemeldet";
+  el.className = "ok";
+}
 
-  const data = await res.json();
-  show(data);
-
-  if (data.token) {
-    localStorage.setItem("rsos_token", data.token);
-    localStorage.setItem("rsos_operator", JSON.stringify(data.operator));
+async function api(path, options = {}) {
+  const headers = options.headers || {};
+  if (token) headers["Authorization"] = "Bearer " + token;
+  if (options.body && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
   }
 
-  setAuthState();
+  const res = await fetch(API_BASE + path, {
+    ...options,
+    headers
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw data;
+  }
+  return data;
+}
+
+async function login() {
+  try {
+    const data = await api("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value
+      })
+    });
+
+    token = data.token;
+    localStorage.setItem("rsos_token", token);
+    setAuthState(data.operator);
+    setOutput(data);
+    await loadDashboard();
+    await loadTenants();
+  } catch (err) {
+    setOutput(err);
+    token = null;
+    localStorage.removeItem("rsos_token");
+    setAuthState();
+  }
 }
 
 function logout() {
+  token = null;
   localStorage.removeItem("rsos_token");
-  localStorage.removeItem("rsos_operator");
   setAuthState();
-  show({ logged_out: true });
-}
-
-async function get(path) {
-  const res = await fetch(API + path);
-  const data = await res.json();
-  show(data);
-  return data;
-}
-
-async function post(path, body) {
-  const headers = { "Content-Type": "application/json" };
-  const token = getToken();
-
-  if (token) {
-    headers.Authorization = "Bearer " + token;
-  }
-
-  const res = await fetch(API + path, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  });
-
-  const data = await res.json();
-  show(data);
-  loadDashboard();
-  return data;
+  setOutput({ logged_out: true });
 }
 
 async function loadDashboard() {
-  const data = await get("/runtime/dashboard");
-  const d = data.dashboard;
-
-  document.getElementById("summary").innerHTML = `
-    <div class="card"><h3>Objekte</h3><p>${d.summary.total_objects}</p></div>
-    <div class="card"><h3>Aktiv</h3><p>${d.summary.active_objects}</p></div>
-    <div class="card"><h3>Hochrisiko</h3><p>${d.summary.high_risk_objects}</p></div>
-    <div class="card"><h3>Events</h3><p>${d.summary.total_events}</p></div>
-  `;
+  try {
+    const data = await api("/runtime/admin/dashboard");
+    renderSummary(data.summary);
+    setOutput(data);
+  } catch (err) {
+    setOutput(err);
+  }
 }
 
-function loadObjects(){ return get("/runtime/objects"); }
-function loadEvents(){ return get("/runtime/events"); }
-async function loadExecutionIntelligence() {
-  const token = getToken();
+function renderSummary(summary) {
+  const grid = document.getElementById("summaryGrid");
+  if (!summary) {
+    grid.innerHTML = "";
+    return;
+  }
 
-  const res = await fetch(API + "/runtime/execution/intelligence", {
-    method: "GET",
-    headers: {
-      "Authorization": "Bearer " + token
-    }
-  });
-async function loadVision() {
-
-  const token = getToken();
-
-  const res = await fetch(API + "/runtime/vision", {
-    method: "GET",
-    headers: {
-      "Authorization": "Bearer " + token
-    }
-  });
-
-  const data = await res.json();
-
-  show(data);
-
-  const v = data.vision;
-
-  document.getElementById("summary").innerHTML = `
-    <div class="card">
-      <h3>Runtime Posture</h3>
-      <p>${v.runtime_posture}</p>
-    </div>
-
-    <div class="card">
-      <h3>Strategic Priority</h3>
-      <p>${v.strategic_priority}</p>
-    </div>
-
-    <div class="card">
-      <h3>Next Best Action</h3>
-      <p>${v.next_best_action}</p>
-    </div>
-
-    <div class="card">
-      <h3>Vision Summary</h3>
-      <p>${v.vision_summary}</p>
-    </div>
-
-    <div class="card">
-      <h3>Vision Metrics</h3>
-      <p>Total Objects: ${v.metrics.total_objects}</p>
-      <p>Active Objects: ${v.metrics.active_objects}</p>
-      <p>High Risk: ${v.metrics.high_risk_objects}</p>
-      <p>Total Jobs: ${v.metrics.total_jobs}</p>
-      <p>Recent Events: ${v.metrics.recent_events}</p>
-    </div>
-
-    <div class="card">
-      <h3>Recommendations</h3>
-      ${v.recommendations.map(r => `<p>${r}</p>`).join("")}
-    </div>
-  `;
-}
-
-  const data = await res.json();
-  show(data);
-
-  const i = data.intelligence;
-
-  document.getElementById("summary").innerHTML = `
-    <div class="card"><h3>Execution Health</h3><p>${i.execution_health}</p></div>
-    <div class="card"><h3>Risk Level</h3><p>${i.risk_level}</p></div>
-    <div class="card"><h3>Jobs</h3>
-      <p>Total: ${i.metrics.total_jobs}</p>
-      <p>Queued: ${i.metrics.queued_jobs}</p>
-      <p>Running: ${i.metrics.running_jobs}</p>
-      <p>Completed: ${i.metrics.completed_jobs}</p>
-      <p>Failed: ${i.metrics.failed_jobs}</p>
-    </div>
-    <div class="card"><h3>Empfehlungen</h3>
-      ${i.recommended_actions.map(a => `<p>${a}</p>`).join("")}
-    </div>
-  `;
-}
-
-function loadControl(){ return get("/runtime/control/" + document.getElementById("objectId").value); }
-function loadReplay(){ return get("/runtime/replay/" + document.getElementById("objectId").value); }
-function loadRecovery(){ return get("/runtime/recovery/" + document.getElementById("objectId").value); }
-
-function createObject(){
-  return post("/runtime/objects", {
-    object_id: document.getElementById("newObjectId").value,
-    runtime_type: document.getElementById("runtimeType").value,
-    state: document.getElementById("state").value,
-    priority: document.getElementById("priority").value,
-    risk_score: Number(document.getElementById("riskScore").value)
-  });
-}
-
-function transitionObject(){
-  return post("/runtime/transition", {
-    object_id: document.getElementById("transitionObjectId").value,
-    to_state: document.getElementById("toState").value
-  });
-}
-
-function approveObject(){
-  return post("/governance/approve", {
-    object_id: document.getElementById("approvalObjectId").value,
-    reason: document.getElementById("approvalReason").value
-  });
-}
-
-function qmReview(){
-  return post("/runtime/qm-review", {
-    object_id: document.getElementById("qmObjectId").value,
-    reviewer: document.getElementById("reviewer").value,
-    result_status: document.getElementById("qmStatus").value,
-    notes: document.getElementById("qmNotes").value
-  });
-}
-
-function createInvoice(){
-  return post("/runtime/invoice", {
-    object_id: document.getElementById("invoiceObjectId").value,
-    invoice_number: document.getElementById("invoiceNumber").value,
-    amount: Number(document.getElementById("amount").value),
-    currency: document.getElementById("currency").value,
-    issued_by: document.getElementById("issuedBy").value,
-    notes: document.getElementById("invoiceNotes").value
-  });
-}
-
-function completeObject(){
-  return post("/runtime/complete", {
-    object_id: document.getElementById("completeObjectId").value,
-    completed_by: document.getElementById("completedBy").value,
-    closing_notes: document.getElementById("closingNotes").value
-  });
-}
-
-window.addEventListener("DOMContentLoaded", () => {
-  setAuthState();
-  loadDashboard();
-});
-
-function applyRolePermissions() {
-  const operator = getOperator();
-  const role = operator ? operator.role : null;
-
-  const permissions = {
-    createObject: ["runtime_admin", "operator"],
-    transitionObject: ["runtime_admin", "operator"],
-    approveObject: ["runtime_admin"],
-    qmReview: ["runtime_admin", "qm"],
-    createInvoice: ["runtime_admin", "finance"],
-    completeObject: ["runtime_admin"]
+  const labels = {
+    tenant_count: "Tenants",
+    member_count: "Members",
+    credential_count: "Credentials",
+    object_count: "Objects",
+    recommendation_count: "Recommendations",
+    training_plan_count: "Training Plans",
+    learning_evidence_count: "Learning Evidence",
+    risk_count: "Risks",
+    governance_decision_count: "Governance",
+    communication_event_count: "Communication",
+    audit_event_count: "Audit Events"
   };
 
-  document.querySelectorAll("button").forEach(button => {
-    const action = button.getAttribute("onclick");
-    if (!action) return;
-
-    for (const fn in permissions) {
-      if (action.includes(fn)) {
-        const allowed = role && permissions[fn].includes(role);
-        button.disabled = !allowed;
-        button.style.opacity = allowed ? "1" : "0.35";
-        button.style.cursor = allowed ? "pointer" : "not-allowed";
-      }
-    }
-  });
+  grid.innerHTML = Object.entries(labels).map(([key, label]) => `
+    <div class="metric">
+      ${label}
+      <strong>${summary[key] ?? 0}</strong>
+    </div>
+  `).join("");
 }
-window.addEventListener("DOMContentLoaded", () => {
-  setAuthState();
-  loadDashboard();
-  applyRolePermissions();
-});
+
+async function loadTenants() {
+  try {
+    const data = await api("/runtime/admin/tenants");
+    renderTenants(data.tenants || []);
+    setOutput(data);
+  } catch (err) {
+    setOutput(err);
+  }
+}
+
+function renderTenants(tenants) {
+  const container = document.getElementById("tenantTable");
+  if (!tenants.length) {
+    container.innerHTML = "<p>Keine Tenants gefunden.</p>";
+    return;
+  }
+
+  container.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Tenant</th>
+          <th>Typ</th>
+          <th>Status</th>
+          <th>Members</th>
+          <th>Credentials</th>
+          <th>Recommendations</th>
+          <th>Training</th>
+          <th>Aktion</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${tenants.map(t => `
+          <tr>
+            <td><strong>${t.tenant_name}</strong><br><span class="muted">${t.tenant_id}</span></td>
+            <td>${t.tenant_type || ""}</td>
+            <td>${t.status || ""}</td>
+            <td>${t.members ?? 0}</td>
+            <td>${t.credentials ?? 0}</td>
+            <td>${t.recommendations ?? 0}</td>
+            <td>${t.training_plans ?? 0}</td>
+            <td><button onclick="selectTenant('${t.tenant_id}')">Öffnen</button></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function selectTenant(tenantId) {
+  document.getElementById("tenantDetailId").value = tenantId;
+  document.getElementById("memberTenantId").value = tenantId;
+  document.getElementById("credentialTenantId").value = tenantId;
+  loadTenantDetail();
+}
+
+async function loadTenantDetail() {
+  try {
+    const tenantId = document.getElementById("tenantDetailId").value;
+    const data = await api("/runtime/admin/tenants/" + encodeURIComponent(tenantId));
+    renderTenantDetail(data);
+    setOutput(data);
+  } catch (err) {
+    setOutput(err);
+  }
+}
+
+function renderTenantDetail(data) {
+  const el = document.getElementById("tenantDetail");
+  if (!data || !data.tenant) {
+    el.innerHTML = "";
+    return;
+  }
+
+  const tenant = data.tenant;
+  const stats = data.statistics || {};
+  const learning = data.learning || {};
+
+  el.innerHTML = `
+    <div class="card" style="box-shadow:none;border:1px solid #e5e7eb;">
+      <h3>${tenant.tenant_name}</h3>
+      <p class="muted">
+        ${tenant.tenant_id} | ${tenant.tenant_type} | ${tenant.status}
+      </p>
+
+      <div class="grid">
+        <div class="metric">Domains<strong>${data.domains?.count ?? 0}</strong></div>
+        <div class="metric">Members<strong>${data.members?.count ?? 0}</strong></div>
+        <div class="metric">Credentials<strong>${data.credentials?.count ?? 0}</strong></div>
+        <div class="metric">Objects<strong>${stats.objects ?? 0}</strong></div>
+        <div class="metric">Recommendations<strong>${stats.recommendations ?? 0}</strong></div>
+        <div class="metric">Training Plans<strong>${stats.training_plans ?? 0}</strong></div>
+        <div class="metric">Learning Evidence<strong>${stats.learning_evidence ?? 0}</strong></div>
+        <div class="metric">Risks<strong>${stats.risks ?? 0}</strong></div>
+      </div>
+
+      <h3>Learning</h3>
+      <div class="grid">
+        <div class="metric">Competencies<strong>${learning.competencies ?? 0}</strong></div>
+        <div class="metric">Open Gaps<strong>${learning.open_gaps ?? 0}</strong></div>
+        <div class="metric">Critical Gaps<strong>${learning.critical_gaps ?? 0}</strong></div>
+        <div class="metric">Total Gap<strong>${learning.total_gap ?? 0}</strong></div>
+        <div class="metric">Gap Reduction<strong>${learning.total_gap_reduction ?? 0}</strong></div>
+        <div class="metric">Effectiveness<strong>${learning.effectiveness_score ?? 0}%</strong></div>
+      </div>
+
+      <h3>Domains</h3>
+      <table>
+        <thead><tr><th>Domain</th><th>Role</th><th>Status</th><th>Created</th></tr></thead>
+        <tbody>
+          ${(data.domains?.items || []).map(d => `
+            <tr>
+              <td>${d.domain_name}</td>
+              <td>${d.domain_role}</td>
+              <td>${d.status}</td>
+              <td>${d.created_at || ""}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+
+      <h3>Members</h3>
+      <table>
+        <thead><tr><th>User</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr></thead>
+        <tbody>
+          ${(data.members?.items || []).map(m => `
+            <tr>
+              <td>${m.username}</td>
+              <td>${m.display_name || ""}</td>
+              <td>${m.email || ""}</td>
+              <td>${m.role}</td>
+              <td>${m.status}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+
+      <h3>Credentials</h3>
+      <table>
+        <thead><tr><th>User</th><th>Status</th><th>Scope</th><th>System Role</th></tr></thead>
+        <tbody>
+          ${(data.credentials?.items || []).map(c => `
+            <tr>
+              <td>${c.username}</td>
+              <td>${c.status}</td>
+              <td>${c.scope}</td>
+              <td>${c.system_role || ""}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+
+async function createTenant() {
+  try {
+    const data = await api("/runtime/admin/tenants", {
+      method: "POST",
+      body: JSON.stringify({
+        tenant_id: document.getElementById("newTenantId").value,
+        tenant_name: document.getElementById("newTenantName").value,
+        tenant_type: document.getElementById("newTenantType").value || "business",
+        owner_name: document.getElementById("newOwnerName").value,
+        owner_email: document.getElementById("newOwnerEmail").value,
+        domain_name: document.getElementById("newDomainName").value
+      })
+    });
+    setOutput(data);
+    await loadTenants();
+  } catch (err) {
+    setOutput(err);
+  }
+}
+
+async function createMember() {
+  try {
+    const tenantId = document.getElementById("memberTenantId").value;
+    const data = await api("/runtime/admin/tenants/" + encodeURIComponent(tenantId) + "/members", {
+      method: "POST",
+      body: JSON.stringify({
+        username: document.getElementById("memberUsername").value,
+        display_name: document.getElementById("memberDisplayName").value,
+        email: document.getElementById("memberEmail").value,
+        role: document.getElementById("memberRole").value
+      })
+    });
+    setOutput(data);
+    await loadTenantDetail();
+  } catch (err) {
+    setOutput(err);
+  }
+}
+
+async function createCredential() {
+  try {
+    const tenantId = document.getElementById("credentialTenantId").value;
+    const data = await api("/runtime/admin/tenants/" + encodeURIComponent(tenantId) + "/credentials", {
+      method: "POST",
+      body: JSON.stringify({
+        username: document.getElementById("credentialUsername").value,
+        password: document.getElementById("credentialPassword").value,
+        scope: document.getElementById("credentialScope").value
+      })
+    });
+    setOutput(data);
+    await loadTenantDetail();
+  } catch (err) {
+    setOutput(err);
+  }
+}
+
+setAuthState();
 </script>
 
 </body>
