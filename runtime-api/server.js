@@ -71,6 +71,7 @@ const { handleLearningCompetenceRoute } = require("./routes/learning/learning-co
 const { handleEvidenceGovernanceRoute } = require("./routes/evidence/evidence-governance-route");
 const { handleHeuristicsPatternRoute } = require("./routes/heuristics/heuristics-pattern-route");
 const { handleGovernancePolicyRoute } = require("./routes/governance/governance-policy-route");
+const { handleGovernanceEvaluateRoute } = require("./routes/governance/governance-evaluate-route");
 const { handleOrchestrationRoute } = require("./routes/orchestrations/orchestration-route");
 const { handleCommunicationRoute } = require("./routes/communications/communication-route");
 const { handleTrainingLearningRoute } = require("./routes/training/training-learning-route");
@@ -1435,55 +1436,18 @@ const server = http.createServer(async (req, res) => {
 
 
 
-    // GOVERNANCE EVALUATE
+    const handledGovernanceEvaluateRoute = await handleGovernanceEvaluateRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole
+    });
 
-    if (req.method === "GET" && path === "/governance/evaluate") {
-
-      const auth = requireRole(req, [
-        "runtime_admin",
-        "auditor"
-      ]);
-
-      if (!auth.allowed) {
-        return send(res, auth.code, auth.response);
-      }
-
-
-      const result = await db.query(`
-        SELECT *
-        FROM runtime_objects
-        WHERE tenant_id = $1
-        ORDER BY created_at DESC
-        LIMIT 1
-      `, [auth.user.tenant_id]);
-
-      const object = result.rows[0];
-
-      if (!object) {
-
-        return send(res, 200, {
-          decision: "no_object"
-        });
-      }
-
-      const allowed =
-        object.risk_score < 70;
-
-      return send(res, 200, {
-        decision: allowed
-          ? "allowed"
-          : "blocked",
-
-        governance_state: allowed
-          ? "baseline_clear"
-          : "operator_approval_required",
-
-        risk_score: object.risk_score,
-        evaluated_object: object.object_id
-      });
+    if (handledGovernanceEvaluateRoute) {
+      return;
     }
-
-
 
 
     const handledScheduleRoute = await handleScheduleRoute({
