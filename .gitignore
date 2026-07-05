@@ -50,3 +50,7 @@ node-agent/work/
 # Registry server generated/state/security artifacts
 registry-server/data/
 registry-server/keys/
+
+# Node agent runtime state
+node-agent/current-version.txt
+node-agent/state/
