@@ -18,6 +18,7 @@ const { handleHealthRoute } = require("./routes/health/health-route");
 const { handleAuthLoginRoute } = require("./routes/auth/login-route");
 const { handleRuntimeEventsRoute } = require("./routes/events/runtime-events-route");
 const { handleAuditChainVerifyRoute } = require("./routes/events/audit-chain-route");
+const { handleExecutionTrustVerifyRoute } = require("./routes/trust/execution-trust-verify-route");
 const { handleListRuntimeObjectsRoute } = require("./routes/objects/list-objects-route");
 const { handleCreateRuntimeObjectRoute } = require("./routes/objects/create-object-route");
 const { handleRuntimeExecuteRoute } = require("./routes/runtime-execute-route");
@@ -1184,6 +1185,19 @@ const server = http.createServer(async (req, res) => {
         send,
         requireRole
       });
+    }
+
+    const handledExecutionTrustVerifyRoute = await handleExecutionTrustVerifyRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole
+    });
+
+    if (handledExecutionTrustVerifyRoute) {
+      return handledExecutionTrustVerifyRoute;
     }
 
     const handledTrainingLearningRoute = await handleTrainingLearningRoute({
