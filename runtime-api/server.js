@@ -1406,6 +1406,21 @@ const server = http.createServer(async (req, res) => {
     }
 
 
+    const handledTenantAdminDetailRoute = await handleTenantAdminDetailRoute({
+      req,
+      res,
+      path,
+      db,
+      requireRole,
+      send
+    });
+
+    if (handledTenantAdminDetailRoute) {
+      return;
+    }
+
+
+
     const handledTenantReadRoute = await handleTenantReadRoute({
       req,
       res,

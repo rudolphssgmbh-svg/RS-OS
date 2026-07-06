@@ -297,22 +297,6 @@ async function handleTrainingLearningRoute({
 
 
 
-
-    const handledCommunicationRoute = await handleCommunicationRoute({
-      req,
-      res,
-      path,
-      db,
-      requireRole,
-      readBody,
-      writeEvent,
-      send
-    });
-
-    if (handledCommunicationRoute) {
-      return;
-    }
-
     // GET RUNTIME LEARNING SUMMARY BY PERSON
 
     if (req.method === "GET" && path.startsWith("/runtime/learning-summary/")) {

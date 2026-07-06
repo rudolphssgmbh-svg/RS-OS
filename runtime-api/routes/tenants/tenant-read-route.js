@@ -59,20 +59,6 @@ async function handleTenantReadRoute({
 
     // GET RUNTIME TENANT BY ID
 
-
-    const handledTenantAdminDetailRoute = await handleTenantAdminDetailRoute({
-      req,
-      res,
-      path,
-      db,
-      requireRole,
-      send
-    });
-
-    if (handledTenantAdminDetailRoute) {
-      return;
-    }
-
     if (req.method === "GET" && path.startsWith("/runtime/tenants/")) {
 
       const auth = requireRole(req, [
