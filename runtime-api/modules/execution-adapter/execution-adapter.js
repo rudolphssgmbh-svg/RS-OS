@@ -36,17 +36,43 @@ class ExecutionAdapter {
     };
   }
 
+  normalizeExecutionResult(execution) {
+    if (!execution) {
+      throw new Error("missing_execution_result");
+    }
+
+    const nodes = Array.isArray(execution.nodes) ? execution.nodes : [];
+    const completedNodes = nodes.filter(node => node.status === "COMPLETED");
+
+    return {
+      execution_id: execution.executionId,
+      execution_graph_id: execution.graphId,
+      status: execution.status,
+      node_count: nodes.length,
+      completed_nodes: completedNodes.length,
+      governance_status: execution.signature ? execution.signature.governanceStatus : null,
+      signature_hash: execution.signature ? execution.signature.hash : null,
+      created_at: execution.createdAt || null,
+      updated_at: execution.updatedAt || null
+    };
+  }
+
   async runGraph(executionGraphId) {
     if (!executionGraphId) {
       throw new Error("missing_execution_graph_id");
     }
 
     const executionId = await this.kernel.run(executionGraphId);
-    const execution = this.executionStore.get(executionId);
+    const execution = this.executionStore.getById(executionId);
+
+    if (!execution) {
+      throw new Error("execution_result_not_found");
+    }
 
     return {
       execution_id: executionId,
-      execution
+      execution: this.normalizeExecutionResult(execution),
+      raw_execution: execution
     };
   }
 
