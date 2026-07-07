@@ -50,6 +50,29 @@ class ExecutionAdapter {
     };
   }
 
+
+  loadGraph(graphDefinition) {
+    if (!graphDefinition) {
+      throw new Error("missing_graph_definition");
+    }
+
+    if (!graphDefinition.execution_graph_id) {
+      throw new Error("missing_execution_graph_id");
+    }
+
+    if (!Array.isArray(graphDefinition.nodes)) {
+      throw new Error("missing_execution_nodes");
+    }
+
+    this.registerGraph(graphDefinition);
+
+    return {
+      loaded: true,
+      execution_graph_id: graphDefinition.execution_graph_id,
+      node_count: graphDefinition.nodes.length
+    };
+  }
+
   getExecutions() {
     return this.executionStore.getAll();
   }
