@@ -54,3 +54,4 @@ registry-server/keys/
 # Node agent runtime state
 node-agent/current-version.txt
 node-agent/state/
+docs/engineering/_quarantine/
