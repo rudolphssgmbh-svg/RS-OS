@@ -1,3 +1,5 @@
+const { enforceGovernanceDecisionGate } = require("../modules/governance/governance-enforcement-service");
+
 async function handleRuntimeExecuteRoute({
   req,
   res,
@@ -94,122 +96,30 @@ async function handleRuntimeExecuteRoute({
       });
     }
 
-    const latestGovernanceResult = await db.query(`
-      SELECT *
-      FROM runtime_governance_decisions
-      WHERE tenant_id = $1
-        AND object_id = $2
-      ORDER BY created_at DESC
-      LIMIT 1
-    `, [
+    const governanceGate = await enforceGovernanceDecisionGate({
+      db,
       tenant_id,
       object_id
-    ]);
+    });
 
-    const latestGovernanceDecision =
-      latestGovernanceResult.rows[0] || null;
-
-    if (!latestGovernanceDecision) {
+    if (!governanceGate.allowed) {
       await writeEvent({
-        event_type: "runtime.governance.gate.review_required",
+        event_type:
+          governanceGate.status === "blocked"
+            ? "runtime.governance.gate.blocked"
+            : "runtime.governance.gate.review_required",
         object_id,
-        message: "Execution gate requires governance check before execution",
+        message: `Execution governance gate: ${governanceGate.reason}`,
         tenant_id
       });
 
-      return send(res, 403, {
-        error: "governance_decision_required",
-        gate_status: "review_required",
-        object_id,
-        tenant_id
-      });
-    }
-
-    if (latestGovernanceDecision.governance_status === "blocked") {
-      await writeEvent({
-        event_type: "runtime.governance.gate.blocked",
-        object_id,
-        message: "Execution blocked by governance gate",
-        tenant_id
-      });
-
-      return send(res, 403, {
-        error: "execution_blocked_by_governance",
-        gate_status: "blocked",
-        governance_status: latestGovernanceDecision.governance_status,
-        decision_id: latestGovernanceDecision.decision_id,
-        object_id,
-        tenant_id
-      });
-    }
-
-    if (latestGovernanceDecision.governance_status === "review_required") {
-      const approvalResult = await db.query(`
-        SELECT *
-        FROM runtime_governance_approvals
-        WHERE tenant_id = $1
-          AND decision_id = $2
-        ORDER BY created_at DESC
-        LIMIT 1
-      `, [
-        tenant_id,
-        latestGovernanceDecision.decision_id
-      ]);
-
-      const approval = approvalResult.rows[0] || null;
-
-      if (!approval) {
-        await writeEvent({
-          event_type: "runtime.governance.gate.review_required",
-          object_id,
-          message: "Execution requires review before governance gate allows execution",
-          tenant_id
-        });
-
-        return send(res, 403, {
-          error: "execution_requires_governance_review",
-          gate_status: "review_required",
-          governance_status: latestGovernanceDecision.governance_status,
-          decision_id: latestGovernanceDecision.decision_id,
-          object_id,
-          tenant_id
-        });
-      }
-
-      if (approval.approval_status === "rejected") {
-        await writeEvent({
-          event_type: "runtime.governance.gate.blocked",
-          object_id,
-          message: "Execution rejected by governance approval",
-          tenant_id
-        });
-
-        return send(res, 403, {
-          error: "execution_rejected_by_governance_approval",
-          gate_status: "blocked",
-          governance_status: latestGovernanceDecision.governance_status,
-          approval_status: approval.approval_status,
-          decision_id: latestGovernanceDecision.decision_id,
-          approval_id: approval.approval_id,
-          object_id,
-          tenant_id
-        });
-      }
-
-      if (approval.approval_status === "approved") {
-        await writeEvent({
-          event_type: "runtime.governance.gate.allowed",
-          object_id,
-          message: "Execution allowed by governance approval",
-          tenant_id
-        });
-      }
+      return send(res, 403, governanceGate);
     }
 
     await writeEvent({
       event_type: "runtime.governance.gate.allowed",
       object_id,
-      message: "Execution allowed by governance gate",
+      message: `Execution governance gate: ${governanceGate.reason}`,
       tenant_id
     });
 
