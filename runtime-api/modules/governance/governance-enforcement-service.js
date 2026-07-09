@@ -48,7 +48,139 @@ async function enforceGovernanceForExecution(options = {}) {
   return normalizeGovernanceDecision(trustEvaluation);
 }
 
+async function enforceGovernanceDecisionGate({
+  db,
+  tenant_id,
+  object_id
+}) {
+  const latestGovernanceResult = await db.query(`
+    SELECT *
+    FROM runtime_governance_decisions
+    WHERE tenant_id = $1
+      AND object_id = $2
+    ORDER BY created_at DESC
+    LIMIT 1
+  `, [
+    tenant_id,
+    object_id
+  ]);
+
+  const latestGovernanceDecision =
+    latestGovernanceResult.rows[0] || null;
+
+  if (!latestGovernanceDecision) {
+    return {
+      allowed: false,
+      status: "review_required",
+      reason: "governance_decision_required",
+      error: "governance_decision_required",
+      gate_status: "review_required",
+      object_id,
+      tenant_id,
+      latest_governance_decision: null,
+      approval: null
+    };
+  }
+
+  if (latestGovernanceDecision.governance_status === "blocked") {
+    return {
+      allowed: false,
+      status: "blocked",
+      reason: "execution_blocked_by_governance",
+      error: "execution_blocked_by_governance",
+      gate_status: "blocked",
+      governance_status: latestGovernanceDecision.governance_status,
+      decision_id: latestGovernanceDecision.decision_id,
+      object_id,
+      tenant_id,
+      latest_governance_decision: latestGovernanceDecision,
+      approval: null
+    };
+  }
+
+  if (latestGovernanceDecision.governance_status === "review_required") {
+    const approvalResult = await db.query(`
+      SELECT *
+      FROM runtime_governance_approvals
+      WHERE tenant_id = $1
+        AND decision_id = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [
+      tenant_id,
+      latestGovernanceDecision.decision_id
+    ]);
+
+    const approval = approvalResult.rows[0] || null;
+
+    if (!approval) {
+      return {
+        allowed: false,
+        status: "review_required",
+        reason: "execution_requires_governance_review",
+        error: "execution_requires_governance_review",
+        gate_status: "review_required",
+        governance_status: latestGovernanceDecision.governance_status,
+        decision_id: latestGovernanceDecision.decision_id,
+        object_id,
+        tenant_id,
+        latest_governance_decision: latestGovernanceDecision,
+        approval: null
+      };
+    }
+
+    if (approval.approval_status === "rejected") {
+      return {
+        allowed: false,
+        status: "blocked",
+        reason: "execution_rejected_by_governance_approval",
+        error: "execution_rejected_by_governance_approval",
+        gate_status: "blocked",
+        governance_status: latestGovernanceDecision.governance_status,
+        approval_status: approval.approval_status,
+        decision_id: latestGovernanceDecision.decision_id,
+        approval_id: approval.approval_id,
+        object_id,
+        tenant_id,
+        latest_governance_decision: latestGovernanceDecision,
+        approval
+      };
+    }
+
+    if (approval.approval_status === "approved") {
+      return {
+        allowed: true,
+        status: "allowed",
+        reason: "execution_allowed_by_governance_approval",
+        gate_status: "allowed",
+        governance_status: latestGovernanceDecision.governance_status,
+        approval_status: approval.approval_status,
+        decision_id: latestGovernanceDecision.decision_id,
+        approval_id: approval.approval_id,
+        object_id,
+        tenant_id,
+        latest_governance_decision: latestGovernanceDecision,
+        approval
+      };
+    }
+  }
+
+  return {
+    allowed: true,
+    status: "allowed",
+    reason: "execution_allowed_by_governance_gate",
+    gate_status: "allowed",
+    governance_status: latestGovernanceDecision.governance_status,
+    decision_id: latestGovernanceDecision.decision_id,
+    object_id,
+    tenant_id,
+    latest_governance_decision: latestGovernanceDecision,
+    approval: null
+  };
+}
+
 module.exports = {
   enforceGovernanceForExecution,
+  enforceGovernanceDecisionGate,
   normalizeGovernanceDecision
 };
