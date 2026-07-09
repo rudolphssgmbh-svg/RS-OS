@@ -1,3 +1,5 @@
+const { verifyExecutionTrust } = require("../../modules/trust/execution-trust-service");
+
 async function handleRuntimeDashboardRoute({
   req,
   res,
@@ -11,6 +13,7 @@ async function handleRuntimeDashboardRoute({
   }
 
   const auth = requireRole(req, [
+    "system_admin",
     "runtime_admin",
     "auditor"
   ]);
@@ -32,6 +35,11 @@ async function handleRuntimeDashboardRoute({
     WHERE tenant_id = $1
   `, [auth.user.tenant_id]);
 
+  const trustResult = await verifyExecutionTrust({
+    db,
+    tenantId: auth.user.tenant_id
+  });
+
   const objects = objectsResult.rows;
   const events = eventsResult.rows;
 
@@ -50,6 +58,18 @@ async function handleRuntimeDashboardRoute({
         active_objects: activeObjects.length,
         high_risk_objects: highRiskObjects.length,
         total_events: events.length
+      },
+      trust: {
+        verification: trustResult.verification,
+        status: trustResult.status,
+        trust_score: trustResult.trust_score,
+        chain_valid: trustResult.chain_valid,
+        hashes_valid: trustResult.hashes_valid,
+        legacy_mode: trustResult.legacy_mode,
+        anomaly_events: trustResult.anomaly_events,
+        current_v2_events: trustResult.current_v2_events,
+        global_events_checked: trustResult.global_events_checked,
+        tenant_events_checked: trustResult.tenant_events_checked
       },
       objects
     }
