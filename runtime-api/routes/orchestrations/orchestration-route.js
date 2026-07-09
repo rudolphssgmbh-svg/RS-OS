@@ -1,3 +1,5 @@
+const { enforceGovernanceDecisionGate } = require("../../modules/governance/governance-enforcement-service");
+
 async function handleOrchestrationRoute({
   req,
   res,
@@ -227,6 +229,33 @@ async function handleOrchestrationRoute({
           current_status: orchestration.status
         });
       }
+
+      const governanceGate = await enforceGovernanceDecisionGate({
+        db,
+        tenant_id,
+        object_id: orchestration.source_object_id
+      });
+
+      if (!governanceGate.allowed) {
+        await writeEvent({
+          tenant_id,
+          object_id: orchestration.source_object_id,
+          event_type:
+            governanceGate.status === "blocked"
+              ? "runtime.governance.gate.blocked"
+              : "runtime.governance.gate.review_required",
+          message: `Orchestration execution governance gate: ${governanceGate.reason}`
+        });
+
+        return send(res, 403, governanceGate);
+      }
+
+      await writeEvent({
+        tenant_id,
+        object_id: orchestration.source_object_id,
+        event_type: "runtime.governance.gate.allowed",
+        message: `Orchestration execution governance gate: ${governanceGate.reason}`
+      });
 
       const executed_by =
         auth.user.operator_id || auth.user.username || "runtime_admin";
