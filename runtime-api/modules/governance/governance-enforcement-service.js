@@ -48,6 +48,36 @@ async function enforceGovernanceForExecution(options = {}) {
   return normalizeGovernanceDecision(trustEvaluation);
 }
 
+function buildEnforcementEvidence({
+  route,
+  action,
+  job_id = null,
+  orchestration_id = null,
+  enforcementResult
+}) {
+  const result = enforcementResult || {};
+
+  return {
+    evidence_type: "governance.enforcement",
+    route: route || "unknown",
+    action: action || "unknown",
+    allowed: result.allowed === true,
+    status: result.status || "unknown",
+    reason: result.reason || "unknown",
+    gate_status: result.gate_status || null,
+    error: result.error || null,
+    tenant_id: result.tenant_id || null,
+    object_id: result.object_id || null,
+    decision_id: result.decision_id || null,
+    approval_id: result.approval_id || null,
+    approval_status: result.approval_status || null,
+    governance_status: result.governance_status || null,
+    job_id,
+    orchestration_id,
+    created_at: new Date().toISOString()
+  };
+}
+
 async function enforceGovernanceDecisionGate({
   db,
   tenant_id,
@@ -180,6 +210,7 @@ async function enforceGovernanceDecisionGate({
 }
 
 module.exports = {
+  buildEnforcementEvidence,
   enforceGovernanceForExecution,
   enforceGovernanceDecisionGate,
   normalizeGovernanceDecision
