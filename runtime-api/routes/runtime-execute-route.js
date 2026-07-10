@@ -1,4 +1,7 @@
-const { enforceGovernanceDecisionGate } = require("../modules/governance/governance-enforcement-service");
+const {
+  buildEnforcementEvidence,
+  enforceGovernanceDecisionGate
+} = require("../modules/governance/governance-enforcement-service");
 
 async function handleRuntimeExecuteRoute({
   req,
@@ -102,6 +105,13 @@ async function handleRuntimeExecuteRoute({
       object_id
     });
 
+    const enforcementEvidence = buildEnforcementEvidence({
+      route: "/runtime/execute",
+      action: execution_type,
+      job_id,
+      enforcementResult: governanceGate
+    });
+
     if (!governanceGate.allowed) {
       await writeEvent({
         event_type:
@@ -110,7 +120,8 @@ async function handleRuntimeExecuteRoute({
             : "runtime.governance.gate.review_required",
         object_id,
         message: `Execution governance gate: ${governanceGate.reason}`,
-        tenant_id
+        tenant_id,
+        event_payload: enforcementEvidence
       });
 
       return send(res, 403, governanceGate);
@@ -120,7 +131,8 @@ async function handleRuntimeExecuteRoute({
       event_type: "runtime.governance.gate.allowed",
       object_id,
       message: `Execution governance gate: ${governanceGate.reason}`,
-      tenant_id
+      tenant_id,
+      event_payload: enforcementEvidence
     });
 
     await db.query(`
@@ -153,7 +165,8 @@ async function handleRuntimeExecuteRoute({
       event_type: "runtime.execution.started",
       object_id,
       message: `Execution started: ${execution_type}`,
-      tenant_id
+      tenant_id,
+      event_payload: enforcementEvidence
     });
 
     return send(res, 200, {
