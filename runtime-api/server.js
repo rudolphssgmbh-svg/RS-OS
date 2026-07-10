@@ -325,7 +325,8 @@ async function writeEvent({
   event_type,
   object_id = null,
   message = "",
-  tenant_id = null
+  tenant_id = null,
+  event_payload = {}
 }) {
 
   const previousEvent = await db.query(`
@@ -363,9 +364,10 @@ async function writeEvent({
       message,
       audit_hash,
       previous_hash,
-      tenant_id
+      tenant_id,
+      event_payload
     )
-    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
   `, [
     event_id,
     event_type,
@@ -373,7 +375,8 @@ async function writeEvent({
     message,
     audit_hash,
     previous_hash,
-    tenant_id
+    tenant_id,
+    JSON.stringify(event_payload)
   ]);
 
   return {
