@@ -1,4 +1,7 @@
-const { enforceGovernanceDecisionGate } = require("../../modules/governance/governance-enforcement-service");
+const {
+  buildEnforcementEvidence,
+  enforceGovernanceDecisionGate
+} = require("../../modules/governance/governance-enforcement-service");
 
 async function handleScheduleRoute({
   req,
@@ -50,6 +53,12 @@ async function handleScheduleRoute({
     object_id
   });
 
+  const deniedEnforcementEvidence = buildEnforcementEvidence({
+    route: "/runtime/schedule",
+    action: execution_type,
+    enforcementResult: governanceGate
+  });
+
   if (!governanceGate.allowed) {
     await writeEvent({
       event_type:
@@ -58,21 +67,30 @@ async function handleScheduleRoute({
           : "runtime.governance.gate.review_required",
       object_id,
       message: `Scheduling governance gate: ${governanceGate.reason}`,
-      tenant_id
+      tenant_id,
+      event_payload: deniedEnforcementEvidence
     });
 
     send(res, 403, governanceGate);
     return true;
   }
 
+  const job_id = `job-${Date.now()}`;
+
+  const scheduledEnforcementEvidence = buildEnforcementEvidence({
+    route: "/runtime/schedule",
+    action: execution_type,
+    job_id,
+    enforcementResult: governanceGate
+  });
+
   await writeEvent({
     event_type: "runtime.governance.gate.allowed",
     object_id,
     message: `Scheduling governance gate: ${governanceGate.reason}`,
-    tenant_id
+    tenant_id,
+    event_payload: scheduledEnforcementEvidence
   });
-
-  const job_id = `job-${Date.now()}`;
 
   const result = await db.query(`
     INSERT INTO runtime_execution_jobs (
@@ -112,7 +130,8 @@ async function handleScheduleRoute({
     event_type: "runtime.job.scheduled",
     object_id,
     message: `Runtime job scheduled for ${scheduled_for}`,
-    tenant_id
+    tenant_id,
+    event_payload: scheduledEnforcementEvidence
   });
 
   send(res, 200, {
