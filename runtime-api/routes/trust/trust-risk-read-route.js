@@ -33,6 +33,21 @@ const TRUST_RISK_SELECT = `
   FROM runtime_trust_risks
 `;
 
+const TRUST_RISK_REVIEW_SELECT = `
+  SELECT
+    review_id,
+    trust_risk_id,
+    action,
+    previous_state,
+    new_state,
+    reviewed_by,
+    review_note,
+    reviewed_at,
+    metadata,
+    created_at
+  FROM runtime_trust_risk_reviews
+`;
+
 function authorizeTrustRiskRead({
   req,
   res,
@@ -57,6 +72,16 @@ function authorizeTrustRiskRead({
   return auth;
 }
 
+function decodePathIdentifier(value) {
+  try {
+    return decodeURIComponent(
+      value
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
 function extractTrustRiskId(path) {
   const match = path.match(
     /^\/runtime\/execution\/trust-risks\/([^/]+)$/
@@ -66,13 +91,94 @@ function extractTrustRiskId(path) {
     return null;
   }
 
-  try {
-    return decodeURIComponent(
-      match[1]
-    ).trim();
-  } catch {
-    return "";
+  return decodePathIdentifier(
+    match[1]
+  );
+}
+
+function extractTrustRiskReviewId(path) {
+  const match = path.match(
+    /^\/runtime\/execution\/trust-risks\/([^/]+)\/reviews$/
+  );
+
+  if (!match) {
+    return null;
   }
+
+  return decodePathIdentifier(
+    match[1]
+  );
+}
+
+async function handleTrustRiskReviewHistory({
+  req,
+  res,
+  trustRiskId,
+  db,
+  send,
+  requireRole
+}) {
+  const auth = authorizeTrustRiskRead({
+    req,
+    res,
+    send,
+    requireRole
+  });
+
+  if (!auth) {
+    return true;
+  }
+
+  if (!trustRiskId) {
+    return send(res, 400, {
+      error:
+        "invalid_trust_risk_id"
+    });
+  }
+
+  const riskResult =
+    await db.query(`
+      SELECT trust_risk_id
+      FROM runtime_trust_risks
+      WHERE trust_risk_id = $1
+      LIMIT 1
+    `, [
+      trustRiskId
+    ]);
+
+  if (riskResult.rows.length === 0) {
+    return send(res, 404, {
+      error:
+        "trust_risk_not_found",
+
+      trust_risk_id:
+        trustRiskId
+    });
+  }
+
+  const reviewResult =
+    await db.query(`
+      ${TRUST_RISK_REVIEW_SELECT}
+      WHERE trust_risk_id = $1
+      ORDER BY
+        reviewed_at ASC,
+        created_at ASC,
+        review_id ASC
+      LIMIT 100
+    `, [
+      trustRiskId
+    ]);
+
+  return send(res, 200, {
+    trust_risk_id:
+      trustRiskId,
+
+    count:
+      reviewResult.rows.length,
+
+    reviews:
+      reviewResult.rows
+  });
 }
 
 async function handleTrustRiskReadRoute({
@@ -119,6 +225,25 @@ async function handleTrustRiskReadRoute({
 
       trust_risks:
         result.rows
+    });
+  }
+
+  const reviewTrustRiskId =
+    extractTrustRiskReviewId(
+      path
+    );
+
+  if (reviewTrustRiskId !== null) {
+    return handleTrustRiskReviewHistory({
+      req,
+      res,
+
+      trustRiskId:
+        reviewTrustRiskId,
+
+      db,
+      send,
+      requireRole
     });
   }
 
@@ -174,6 +299,9 @@ async function handleTrustRiskReadRoute({
 module.exports = {
   TRUST_RISK_BASE_PATH,
   TRUST_RISK_READ_ROLES,
+  TRUST_RISK_REVIEW_SELECT,
   extractTrustRiskId,
-  handleTrustRiskReadRoute
+  extractTrustRiskReviewId,
+  handleTrustRiskReadRoute,
+  handleTrustRiskReviewHistory
 };
