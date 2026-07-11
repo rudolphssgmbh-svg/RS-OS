@@ -21,6 +21,7 @@ services:
 
   runtime-api:
     build: ./runtime-api
+    image: rsos-runtime-api:latest
     container_name: rsos-runtime-api
     restart: unless-stopped
     depends_on:
@@ -37,6 +38,7 @@ services:
 
   runtime-api-recovery:
     build: ./runtime-api
+    image: rsos-runtime-api-recovery:latest
     container_name: rsos-runtime-api-recovery
     restart: unless-stopped
     depends_on:
@@ -51,6 +53,7 @@ services:
 
   registry-server:
     build: ./registry-server
+    image: rsos-registry-server:latest
     container_name: rsos-registry-server
     restart: unless-stopped
     environment:
