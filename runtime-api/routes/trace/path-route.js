@@ -207,6 +207,7 @@ async function handlePathRoute({
         event_type,
         object_id,
         message,
+        event_payload,
         audit_hash,
         previous_hash,
         created_at
