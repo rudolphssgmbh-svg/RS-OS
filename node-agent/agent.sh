@@ -25,10 +25,10 @@ log() {
 }
 
 docker_compose_cmd() {
-  if command -v docker-compose >/dev/null 2>&1; then
-    echo "docker-compose"
-  elif docker compose version >/dev/null 2>&1; then
+  if docker compose version >/dev/null 2>&1; then
     echo "docker compose"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    echo "docker-compose"
   else
     echo ""
   fi
