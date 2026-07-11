@@ -1,4 +1,7 @@
-const { enforceGovernanceDecisionGate } = require("../../modules/governance/governance-enforcement-service");
+const {
+  buildEnforcementEvidence,
+  enforceGovernanceDecisionGate
+} = require("../../modules/governance/governance-enforcement-service");
 
 async function handleOrchestrationRoute({
   req,
@@ -236,6 +239,13 @@ async function handleOrchestrationRoute({
         object_id: orchestration.source_object_id
       });
 
+      const orchestrationEnforcementEvidence = buildEnforcementEvidence({
+        route: "/runtime/orchestrations/execute",
+        action: orchestration.orchestration_type,
+        orchestration_id,
+        enforcementResult: governanceGate
+      });
+
       if (!governanceGate.allowed) {
         await writeEvent({
           tenant_id,
@@ -244,7 +254,8 @@ async function handleOrchestrationRoute({
             governanceGate.status === "blocked"
               ? "runtime.governance.gate.blocked"
               : "runtime.governance.gate.review_required",
-          message: `Orchestration execution governance gate: ${governanceGate.reason}`
+          message: `Orchestration execution governance gate: ${governanceGate.reason}`,
+          event_payload: orchestrationEnforcementEvidence
         });
 
         return send(res, 403, governanceGate);
@@ -254,7 +265,8 @@ async function handleOrchestrationRoute({
         tenant_id,
         object_id: orchestration.source_object_id,
         event_type: "runtime.governance.gate.allowed",
-        message: `Orchestration execution governance gate: ${governanceGate.reason}`
+        message: `Orchestration execution governance gate: ${governanceGate.reason}`,
+        event_payload: orchestrationEnforcementEvidence
       });
 
       const executed_by =
@@ -334,7 +346,8 @@ async function handleOrchestrationRoute({
         tenant_id,
         object_id: executedOrchestration.source_object_id,
         event_type: "runtime.orchestration.executed",
-        message: `Orchestration executed: ${executedOrchestration.orchestration_type}`
+        message: `Orchestration executed: ${executedOrchestration.orchestration_type}`,
+        event_payload: orchestrationEnforcementEvidence
       });
 
       return send(res, 200, {
