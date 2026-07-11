@@ -104,6 +104,21 @@ function normalizeReviewTimestamp(value) {
   return normalized;
 }
 
+async function getTrustRisk({
+  db,
+  trustRiskId
+}) {
+  const result = await db.query(`
+    ${TRUST_RISK_SELECT}
+    WHERE trust_risk_id = $1
+    LIMIT 1
+  `, [
+    trustRiskId
+  ]);
+
+  return result.rows[0] || null;
+}
+
 async function acknowledgeTrustRisk({
   db,
   trustRiskId,
@@ -180,16 +195,14 @@ async function acknowledgeTrustRisk({
     return updateResult.rows[0];
   }
 
-  const existingResult =
-    await db.query(`
-      ${TRUST_RISK_SELECT}
-      WHERE trust_risk_id = $1
-      LIMIT 1
-    `, [
-      normalizedTrustRiskId
-    ]);
+  const existing =
+    await getTrustRisk({
+      db,
+      trustRiskId:
+        normalizedTrustRiskId
+    });
 
-  if (existingResult.rows.length === 0) {
+  if (!existing) {
     throw new TrustRiskReviewError({
       code:
         "trust_risk_not_found",
@@ -202,9 +215,6 @@ async function acknowledgeTrustRisk({
       }
     });
   }
-
-  const existing =
-    existingResult.rows[0];
 
   if (
     existing.risk_state ===
@@ -262,8 +272,168 @@ async function acknowledgeTrustRisk({
   });
 }
 
+async function resolveTrustRisk({
+  db,
+  trustRiskId,
+  resolvedBy,
+  resolutionNote,
+  resolvedAt = new Date()
+}) {
+  if (!db || typeof db.query !== "function") {
+    throw new Error(
+      "invalid_database_client"
+    );
+  }
+
+  const normalizedTrustRiskId =
+    requireNonEmptyString(
+      trustRiskId,
+      "trust_risk_id",
+      256
+    );
+
+  const normalizedResolvedBy =
+    requireNonEmptyString(
+      resolvedBy,
+      "resolved_by",
+      256
+    );
+
+  const normalizedResolutionNote =
+    requireNonEmptyString(
+      resolutionNote,
+      "resolution_note",
+      4000
+    );
+
+  const normalizedResolvedAt =
+    normalizeReviewTimestamp(
+      resolvedAt
+    );
+
+  const updateResult = await db.query(`
+    UPDATE runtime_trust_risks
+    SET
+      risk_state =
+        'resolved',
+
+      resolved_at =
+        $4::timestamptz,
+
+      resolution_note =
+        $3::text,
+
+      metadata =
+        metadata ||
+        jsonb_build_object(
+          'resolved_by',
+          $2::text,
+
+          'resolved_at',
+          $4::timestamptz,
+
+          'resolution_note',
+          $3::text
+        ),
+
+      updated_at =
+        $4::timestamptz
+
+    WHERE trust_risk_id = $1
+      AND risk_state = 'acknowledged'
+
+    RETURNING *
+  `, [
+    normalizedTrustRiskId,
+    normalizedResolvedBy,
+    normalizedResolutionNote,
+    normalizedResolvedAt
+  ]);
+
+  if (updateResult.rows.length === 1) {
+    return updateResult.rows[0];
+  }
+
+  const existing =
+    await getTrustRisk({
+      db,
+      trustRiskId:
+        normalizedTrustRiskId
+    });
+
+  if (!existing) {
+    throw new TrustRiskReviewError({
+      code:
+        "trust_risk_not_found",
+      status:
+        404,
+
+      details: {
+        trust_risk_id:
+          normalizedTrustRiskId
+      }
+    });
+  }
+
+  if (existing.risk_state === "open") {
+    throw new TrustRiskReviewError({
+      code:
+        "trust_risk_not_acknowledged",
+      status:
+        409,
+
+      details: {
+        trust_risk_id:
+          normalizedTrustRiskId,
+
+        risk_state:
+          existing.risk_state,
+
+        required_state:
+          "acknowledged"
+      }
+    });
+  }
+
+  if (
+    existing.risk_state ===
+    "resolved"
+  ) {
+    throw new TrustRiskReviewError({
+      code:
+        "trust_risk_already_resolved",
+      status:
+        409,
+
+      details: {
+        trust_risk_id:
+          normalizedTrustRiskId,
+
+        risk_state:
+          existing.risk_state
+      }
+    });
+  }
+
+  throw new TrustRiskReviewError({
+    code:
+      "invalid_trust_risk_state",
+    status:
+      409,
+
+    details: {
+      trust_risk_id:
+        normalizedTrustRiskId,
+
+      risk_state:
+        existing.risk_state
+    }
+  });
+}
+
 module.exports = {
   TRUST_RISK_SELECT,
   TrustRiskReviewError,
-  acknowledgeTrustRisk
+  acknowledgeTrustRisk,
+  resolveTrustRisk
 };

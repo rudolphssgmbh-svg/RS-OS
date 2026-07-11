@@ -1,6 +1,7 @@
 const {
   TrustRiskReviewError,
-  acknowledgeTrustRisk
+  acknowledgeTrustRisk,
+  resolveTrustRisk
 } = require(
   "../../modules/trust/" +
   "trust-risk-review-service"
@@ -9,9 +10,15 @@ const {
 const ACKNOWLEDGE_PATH_PATTERN =
   /^\/runtime\/execution\/trust-risks\/([^/]+)\/acknowledge$/;
 
-function extractAcknowledgeTrustRiskId(path) {
+const RESOLVE_PATH_PATTERN =
+  /^\/runtime\/execution\/trust-risks\/([^/]+)\/resolve$/;
+
+function extractPathTrustRiskId({
+  path,
+  pattern
+}) {
   const match = path.match(
-    ACKNOWLEDGE_PATH_PATTERN
+    pattern
   );
 
   if (!match) {
@@ -27,6 +34,56 @@ function extractAcknowledgeTrustRiskId(path) {
   }
 }
 
+function extractAcknowledgeTrustRiskId(path) {
+  return extractPathTrustRiskId({
+    path,
+    pattern:
+      ACKNOWLEDGE_PATH_PATTERN
+  });
+}
+
+function extractResolveTrustRiskId(path) {
+  return extractPathTrustRiskId({
+    path,
+    pattern:
+      RESOLVE_PATH_PATTERN
+  });
+}
+
+function getReviewTarget(path) {
+  const acknowledgeTrustRiskId =
+    extractAcknowledgeTrustRiskId(
+      path
+    );
+
+  if (acknowledgeTrustRiskId !== null) {
+    return {
+      action:
+        "acknowledge",
+
+      trustRiskId:
+        acknowledgeTrustRiskId
+    };
+  }
+
+  const resolveTrustRiskId =
+    extractResolveTrustRiskId(
+      path
+    );
+
+  if (resolveTrustRiskId !== null) {
+    return {
+      action:
+        "resolve",
+
+      trustRiskId:
+        resolveTrustRiskId
+    };
+  }
+
+  return null;
+}
+
 async function handleTrustRiskReviewRoute({
   req,
   res,
@@ -40,12 +97,10 @@ async function handleTrustRiskReviewRoute({
     return false;
   }
 
-  const trustRiskId =
-    extractAcknowledgeTrustRiskId(
-      path
-    );
+  const reviewTarget =
+    getReviewTarget(path);
 
-  if (trustRiskId === null) {
+  if (!reviewTarget) {
     return false;
   }
 
@@ -61,7 +116,7 @@ async function handleTrustRiskReviewRoute({
     );
   }
 
-  if (!trustRiskId) {
+  if (!reviewTarget.trustRiskId) {
     return send(res, 400, {
       error:
         "invalid_trust_risk_id"
@@ -80,33 +135,79 @@ async function handleTrustRiskReviewRoute({
   }
 
   try {
-    const acknowledgedAt =
-      new Date();
-
-    const acknowledgedBy =
+    const operatorId =
       auth.user.operator_id ||
+      auth.user.username ||
       "system_admin";
 
+    if (
+      reviewTarget.action ===
+      "acknowledge"
+    ) {
+      const acknowledgedAt =
+        new Date();
+
+      const trustRisk =
+        await acknowledgeTrustRisk({
+          db,
+
+          trustRiskId:
+            reviewTarget.trustRiskId,
+
+          acknowledgedBy:
+            operatorId,
+
+          acknowledgementNote:
+            body.acknowledgement_note,
+
+          acknowledgedAt
+        });
+
+      return send(res, 200, {
+        action:
+          "runtime.execution." +
+          "trust-risk.acknowledge",
+
+        acknowledged_by:
+          operatorId,
+
+        acknowledged_at:
+          acknowledgedAt.toISOString(),
+
+        trust_risk:
+          trustRisk
+      });
+    }
+
+    const resolvedAt =
+      new Date();
+
     const trustRisk =
-      await acknowledgeTrustRisk({
+      await resolveTrustRisk({
         db,
-        trustRiskId,
-        acknowledgedBy,
-        acknowledgementNote:
-          body.acknowledgement_note,
-        acknowledgedAt
+
+        trustRiskId:
+          reviewTarget.trustRiskId,
+
+        resolvedBy:
+          operatorId,
+
+        resolutionNote:
+          body.resolution_note,
+
+        resolvedAt
       });
 
     return send(res, 200, {
       action:
         "runtime.execution." +
-        "trust-risk.acknowledge",
+        "trust-risk.resolve",
 
-      acknowledged_by:
-        acknowledgedBy,
+      resolved_by:
+        operatorId,
 
-      acknowledged_at:
-        acknowledgedAt.toISOString(),
+      resolved_at:
+        resolvedAt.toISOString(),
 
       trust_risk:
         trustRisk
@@ -134,6 +235,9 @@ async function handleTrustRiskReviewRoute({
 
 module.exports = {
   ACKNOWLEDGE_PATH_PATTERN,
+  RESOLVE_PATH_PATTERN,
   extractAcknowledgeTrustRiskId,
+  extractResolveTrustRiskId,
+  getReviewTarget,
   handleTrustRiskReviewRoute
 };
