@@ -262,8 +262,21 @@ if (
 
   const decision = latestDecision.rows[0];
 
+  const allowedApprovalStatuses = [
+    "approved",
+    "rejected"
+  ];
+
   const approvalStatus =
     body.approval_status || body.status || "approved";
+
+  if (!allowedApprovalStatuses.includes(approvalStatus)) {
+    return send(res, 400, {
+      error: "validation_error",
+      message: "invalid governance approval status",
+      allowed_statuses: allowedApprovalStatuses
+    });
+  }
 
   const reason =
     body.reason || "Incident governance approval created";
@@ -357,8 +370,23 @@ if (
   const decision_id =
     "gov-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
 
+  const allowedGovernanceStatuses = [
+    "pending_review",
+    "review_required",
+    "allowed",
+    "blocked"
+  ];
+
   const governance_status =
     body.status || "pending_review";
+
+  if (!allowedGovernanceStatuses.includes(governance_status)) {
+    return send(res, 400, {
+      error: "validation_error",
+      message: "invalid governance decision status",
+      allowed_statuses: allowedGovernanceStatuses
+    });
+  }
 
   const reason_codes = {
     decision_type: body.decision_type || "incident_governance_review",
