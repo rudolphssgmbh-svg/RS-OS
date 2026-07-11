@@ -1,3 +1,7 @@
+const {
+  verifyExecutionTrust
+} = require("../../modules/trust/execution-trust-service");
+
 async function handleAuditChainVerifyRoute({
   req,
   res,
@@ -6,6 +10,7 @@ async function handleAuditChainVerifyRoute({
   requireRole
 }) {
   const auth = requireRole(req, [
+    "system_admin",
     "runtime_admin",
     "auditor"
   ]);
@@ -14,51 +19,74 @@ async function handleAuditChainVerifyRoute({
     return send(res, auth.code, auth.response);
   }
 
-  const result = await db.query(`
+  const trustResult = await verifyExecutionTrust({
+    db,
+    tenantId: auth.user.tenant_id
+  });
+
+  const boundaryResult = await db.query(`
     SELECT
       event_id,
-      event_type,
-      object_id,
-      audit_hash,
-      previous_hash,
       created_at
     FROM runtime_events
-    WHERE tenant_id = $1
-    ORDER BY created_at ASC
-  `, [
-    auth.user.tenant_id
-  ]);
+    ORDER BY created_at ASC, event_id ASC
+  `);
 
-  const events = result.rows;
-
-  let chain_valid = true;
-  let broken_at = null;
-  let expected_previous_hash = null;
-  let actual_previous_hash = null;
-
-  for (let i = 1; i < events.length; i++) {
-    const previous = events[i - 1];
-    const current = events[i];
-
-    if (current.previous_hash !== previous.audit_hash) {
-      chain_valid = false;
-      broken_at = current.event_id;
-      expected_previous_hash = previous.audit_hash;
-      actual_previous_hash = current.previous_hash;
-      break;
-    }
-  }
+  const events = boundaryResult.rows;
 
   return send(res, 200, {
     tenant_id: auth.user.tenant_id,
-    events_checked: events.length,
-    chain_valid,
-    broken_at,
-    expected_previous_hash,
-    actual_previous_hash,
-    first_event_id: events.length > 0 ? events[0].event_id : null,
-    last_event_id: events.length > 0 ? events[events.length - 1].event_id : null
+
+    verification: "runtime.audit.chain",
+    trust_verification: trustResult.verification,
+    status: trustResult.status,
+    scope: trustResult.scope,
+
+    events_checked: trustResult.global_events_checked,
+    global_events_checked: trustResult.global_events_checked,
+    tenant_events_checked: trustResult.tenant_events_checked,
+    sealed_events_checked: trustResult.sealed_events_checked,
+
+    chain_valid: trustResult.chain_valid,
+    hashes_valid: trustResult.hashes_valid,
+    trust_score: trustResult.trust_score,
+
+    legacy_mode: trustResult.legacy_mode,
+    legacy_unsealed_events: trustResult.legacy_unsealed_events,
+    legacy_v1_events: trustResult.legacy_v1_events,
+    legacy_v1b_events: trustResult.legacy_v1b_events,
+    legacy_duplicate_hash_events:
+      trustResult.legacy_duplicate_hash_events,
+    current_v2_events: trustResult.current_v2_events,
+
+    anomaly_events: trustResult.anomaly_events,
+    anomalies: trustResult.anomalies,
+
+    broken_at: trustResult.broken_chain_at,
+    broken_chain_at: trustResult.broken_chain_at,
+    broken_hash_at: trustResult.broken_hash_at,
+
+    expected_previous_hash:
+      trustResult.expected_previous_hash,
+    actual_previous_hash:
+      trustResult.actual_previous_hash,
+    expected_audit_hash:
+      trustResult.expected_audit_hash,
+    actual_audit_hash:
+      trustResult.actual_audit_hash,
+
+    first_event_id:
+      events.length > 0
+        ? events[0].event_id
+        : null,
+
+    last_event_id:
+      events.length > 0
+        ? events[events.length - 1].event_id
+        : null
   });
 }
 
-module.exports = { handleAuditChainVerifyRoute };
+module.exports = {
+  handleAuditChainVerifyRoute
+};
