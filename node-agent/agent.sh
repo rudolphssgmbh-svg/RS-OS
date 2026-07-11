@@ -24,14 +24,8 @@ log() {
   echo "[$(date -Iseconds)] $1" | tee -a "$LOG_FILE"
 }
 
-docker_compose_cmd() {
-  if docker compose version >/dev/null 2>&1; then
-    echo "docker compose"
-  elif command -v docker-compose >/dev/null 2>&1; then
-    echo "docker-compose"
-  else
-    echo ""
-  fi
+docker_compose_available() {
+  docker compose version >/dev/null 2>&1
 }
 
 api_get() {
@@ -118,10 +112,11 @@ if [ -n "$COMMAND_ACTION" ]; then
   RESULT="ignored"
 
   if [ "$COMMAND_ACTION" = "restart-runtime" ]; then
-    COMPOSE_CMD="$(docker_compose_cmd)"
-    if [ -n "$COMPOSE_CMD" ]; then
-      cd "$BASE_DIR"
-      $COMPOSE_CMD restart runtime-api
+    if docker_compose_available; then
+      docker compose \
+        -p rsos \
+        -f "$BASE_DIR/docker-compose.yml" \
+        restart runtime-api
       RESULT="runtime_restarted"
     else
       RESULT="docker_compose_not_available"
