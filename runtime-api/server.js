@@ -19,6 +19,7 @@ const { handleAuthLoginRoute } = require("./routes/auth/login-route");
 const { handleRuntimeEventsRoute } = require("./routes/events/runtime-events-route");
 const { handleAuditChainVerifyRoute } = require("./routes/events/audit-chain-route");
 const { handleExecutionTrustVerifyRoute } = require("./routes/trust/execution-trust-verify-route");
+const { handleTrustRiskMaterializeRoute } = require("./routes/trust/trust-risk-materialize-route");
 const { handleListRuntimeObjectsRoute } = require("./routes/objects/list-objects-route");
 const { handleCreateRuntimeObjectRoute } = require("./routes/objects/create-object-route");
 const { handleRuntimeExecuteRoute } = require("./routes/runtime-execute-route");
@@ -1201,6 +1202,20 @@ const server = http.createServer(async (req, res) => {
 
     if (handledExecutionTrustVerifyRoute) {
       return handledExecutionTrustVerifyRoute;
+    }
+
+    const handledTrustRiskMaterializeRoute =
+      await handleTrustRiskMaterializeRoute({
+        req,
+        res,
+        path,
+        db,
+        send,
+        requireRole
+      });
+
+    if (handledTrustRiskMaterializeRoute) {
+      return handledTrustRiskMaterializeRoute;
     }
 
     const handledTrainingLearningRoute = await handleTrainingLearningRoute({
