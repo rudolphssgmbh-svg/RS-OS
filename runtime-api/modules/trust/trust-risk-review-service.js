@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+
 const TRUST_RISK_SELECT = `
   SELECT
     trust_risk_id,
@@ -104,14 +106,76 @@ function normalizeReviewTimestamp(value) {
   return normalized;
 }
 
+function buildTrustRiskReviewId() {
+  return (
+    "trust-risk-review-" +
+    crypto.randomUUID()
+  );
+}
+
+async function withReviewTransaction({
+  db,
+  operation
+}) {
+  if (
+    !db ||
+    typeof db.connect !== "function"
+  ) {
+    throw new Error(
+      "invalid_database_pool"
+    );
+  }
+
+  const client =
+    await db.connect();
+
+  if (
+    !client ||
+    typeof client.query !== "function" ||
+    typeof client.release !== "function"
+  ) {
+    throw new Error(
+      "invalid_database_transaction_client"
+    );
+  }
+
+  try {
+    await client.query("BEGIN");
+
+    const result =
+      await operation(client);
+
+    await client.query("COMMIT");
+
+    return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Preserve the original operation error.
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function getTrustRisk({
   db,
-  trustRiskId
+  trustRiskId,
+  forUpdate = false
 }) {
+  const lockingClause =
+    forUpdate
+      ? "FOR UPDATE"
+      : "";
+
   const result = await db.query(`
     ${TRUST_RISK_SELECT}
     WHERE trust_risk_id = $1
     LIMIT 1
+    ${lockingClause}
   `, [
     trustRiskId
   ]);
@@ -119,89 +183,63 @@ async function getTrustRisk({
   return result.rows[0] || null;
 }
 
-async function acknowledgeTrustRisk({
+async function insertTrustRiskReview({
   db,
+  reviewId,
   trustRiskId,
-  acknowledgedBy,
-  acknowledgementNote,
-  acknowledgedAt = new Date()
+  action,
+  previousState,
+  newState,
+  reviewedBy,
+  reviewNote,
+  reviewedAt,
+  metadata = {}
 }) {
-  if (!db || typeof db.query !== "function") {
-    throw new Error(
-      "invalid_database_client"
-    );
-  }
-
-  const normalizedTrustRiskId =
-    requireNonEmptyString(
-      trustRiskId,
-      "trust_risk_id",
-      256
-    );
-
-  const normalizedAcknowledgedBy =
-    requireNonEmptyString(
-      acknowledgedBy,
-      "acknowledged_by",
-      256
-    );
-
-  const normalizedAcknowledgementNote =
-    requireNonEmptyString(
-      acknowledgementNote,
-      "acknowledgement_note",
-      2000
-    );
-
-  const normalizedAcknowledgedAt =
-    normalizeReviewTimestamp(
-      acknowledgedAt
-    );
-
-  const updateResult = await db.query(`
-    UPDATE runtime_trust_risks
-    SET
-      risk_state =
-        'acknowledged',
-
-      metadata =
-        metadata ||
-        jsonb_build_object(
-          'acknowledged_by',
-          $2::text,
-
-          'acknowledged_at',
-          $4::timestamptz,
-
-          'acknowledgement_note',
-          $3::text
-        ),
-
-      updated_at =
-        $4::timestamptz
-
-    WHERE trust_risk_id = $1
-      AND risk_state = 'open'
-
+  const result = await db.query(`
+    INSERT INTO runtime_trust_risk_reviews (
+      review_id,
+      trust_risk_id,
+      action,
+      previous_state,
+      new_state,
+      reviewed_by,
+      review_note,
+      reviewed_at,
+      metadata,
+      created_at
+    )
+    VALUES (
+      $1,
+      $2,
+      $3,
+      $4,
+      $5,
+      $6,
+      $7,
+      $8,
+      $9::jsonb,
+      $8
+    )
     RETURNING *
   `, [
-    normalizedTrustRiskId,
-    normalizedAcknowledgedBy,
-    normalizedAcknowledgementNote,
-    normalizedAcknowledgedAt
+    reviewId,
+    trustRiskId,
+    action,
+    previousState,
+    newState,
+    reviewedBy,
+    reviewNote,
+    reviewedAt,
+    JSON.stringify(metadata)
   ]);
 
-  if (updateResult.rows.length === 1) {
-    return updateResult.rows[0];
-  }
+  return result.rows[0];
+}
 
-  const existing =
-    await getTrustRisk({
-      db,
-      trustRiskId:
-        normalizedTrustRiskId
-    });
-
+function throwAcknowledgeStateError({
+  existing,
+  trustRiskId
+}) {
   if (!existing) {
     throw new TrustRiskReviewError({
       code:
@@ -211,7 +249,7 @@ async function acknowledgeTrustRisk({
 
       details: {
         trust_risk_id:
-          normalizedTrustRiskId
+          trustRiskId
       }
     });
   }
@@ -228,7 +266,7 @@ async function acknowledgeTrustRisk({
 
       details: {
         trust_risk_id:
-          normalizedTrustRiskId,
+          trustRiskId,
 
         risk_state:
           existing.risk_state
@@ -248,7 +286,7 @@ async function acknowledgeTrustRisk({
 
       details: {
         trust_risk_id:
-          normalizedTrustRiskId,
+          trustRiskId,
 
         risk_state:
           existing.risk_state
@@ -264,7 +302,7 @@ async function acknowledgeTrustRisk({
 
     details: {
       trust_risk_id:
-        normalizedTrustRiskId,
+        trustRiskId,
 
       risk_state:
         existing.risk_state
@@ -272,95 +310,10 @@ async function acknowledgeTrustRisk({
   });
 }
 
-async function resolveTrustRisk({
-  db,
-  trustRiskId,
-  resolvedBy,
-  resolutionNote,
-  resolvedAt = new Date()
+function throwResolveStateError({
+  existing,
+  trustRiskId
 }) {
-  if (!db || typeof db.query !== "function") {
-    throw new Error(
-      "invalid_database_client"
-    );
-  }
-
-  const normalizedTrustRiskId =
-    requireNonEmptyString(
-      trustRiskId,
-      "trust_risk_id",
-      256
-    );
-
-  const normalizedResolvedBy =
-    requireNonEmptyString(
-      resolvedBy,
-      "resolved_by",
-      256
-    );
-
-  const normalizedResolutionNote =
-    requireNonEmptyString(
-      resolutionNote,
-      "resolution_note",
-      4000
-    );
-
-  const normalizedResolvedAt =
-    normalizeReviewTimestamp(
-      resolvedAt
-    );
-
-  const updateResult = await db.query(`
-    UPDATE runtime_trust_risks
-    SET
-      risk_state =
-        'resolved',
-
-      resolved_at =
-        $4::timestamptz,
-
-      resolution_note =
-        $3::text,
-
-      metadata =
-        metadata ||
-        jsonb_build_object(
-          'resolved_by',
-          $2::text,
-
-          'resolved_at',
-          $4::timestamptz,
-
-          'resolution_note',
-          $3::text
-        ),
-
-      updated_at =
-        $4::timestamptz
-
-    WHERE trust_risk_id = $1
-      AND risk_state = 'acknowledged'
-
-    RETURNING *
-  `, [
-    normalizedTrustRiskId,
-    normalizedResolvedBy,
-    normalizedResolutionNote,
-    normalizedResolvedAt
-  ]);
-
-  if (updateResult.rows.length === 1) {
-    return updateResult.rows[0];
-  }
-
-  const existing =
-    await getTrustRisk({
-      db,
-      trustRiskId:
-        normalizedTrustRiskId
-    });
-
   if (!existing) {
     throw new TrustRiskReviewError({
       code:
@@ -370,7 +323,7 @@ async function resolveTrustRisk({
 
       details: {
         trust_risk_id:
-          normalizedTrustRiskId
+          trustRiskId
       }
     });
   }
@@ -384,7 +337,7 @@ async function resolveTrustRisk({
 
       details: {
         trust_risk_id:
-          normalizedTrustRiskId,
+          trustRiskId,
 
         risk_state:
           existing.risk_state,
@@ -407,7 +360,7 @@ async function resolveTrustRisk({
 
       details: {
         trust_risk_id:
-          normalizedTrustRiskId,
+          trustRiskId,
 
         risk_state:
           existing.risk_state
@@ -423,10 +376,328 @@ async function resolveTrustRisk({
 
     details: {
       trust_risk_id:
-        normalizedTrustRiskId,
+        trustRiskId,
 
       risk_state:
         existing.risk_state
+    }
+  });
+}
+
+async function acknowledgeTrustRisk({
+  db,
+  trustRiskId,
+  acknowledgedBy,
+  acknowledgementNote,
+  acknowledgedAt = new Date(),
+  reviewId = buildTrustRiskReviewId()
+}) {
+  const normalizedTrustRiskId =
+    requireNonEmptyString(
+      trustRiskId,
+      "trust_risk_id",
+      256
+    );
+
+  const normalizedAcknowledgedBy =
+    requireNonEmptyString(
+      acknowledgedBy,
+      "acknowledged_by",
+      256
+    );
+
+  const normalizedAcknowledgementNote =
+    requireNonEmptyString(
+      acknowledgementNote,
+      "acknowledgement_note",
+      2000
+    );
+
+  const normalizedReviewId =
+    requireNonEmptyString(
+      reviewId,
+      "review_id",
+      256
+    );
+
+  const normalizedAcknowledgedAt =
+    normalizeReviewTimestamp(
+      acknowledgedAt
+    );
+
+  return withReviewTransaction({
+    db,
+
+    operation: async client => {
+      const existing =
+        await getTrustRisk({
+          db:
+            client,
+
+          trustRiskId:
+            normalizedTrustRiskId,
+
+          forUpdate:
+            true
+        });
+
+      if (
+        !existing ||
+        existing.risk_state !== "open"
+      ) {
+        throwAcknowledgeStateError({
+          existing,
+
+          trustRiskId:
+            normalizedTrustRiskId
+        });
+      }
+
+      const updateResult =
+        await client.query(`
+          UPDATE runtime_trust_risks
+          SET
+            risk_state =
+              'acknowledged',
+
+            metadata =
+              metadata ||
+              jsonb_build_object(
+                'acknowledged_by',
+                $2::text,
+
+                'acknowledged_at',
+                $4::timestamptz,
+
+                'acknowledgement_note',
+                $3::text
+              ),
+
+            updated_at =
+              $4::timestamptz
+
+          WHERE trust_risk_id = $1
+            AND risk_state = 'open'
+
+          RETURNING *
+        `, [
+          normalizedTrustRiskId,
+          normalizedAcknowledgedBy,
+          normalizedAcknowledgementNote,
+          normalizedAcknowledgedAt
+        ]);
+
+      if (updateResult.rows.length !== 1) {
+        throw new Error(
+          "trust_risk_acknowledge_update_failed"
+        );
+      }
+
+      const review =
+        await insertTrustRiskReview({
+          db:
+            client,
+
+          reviewId:
+            normalizedReviewId,
+
+          trustRiskId:
+            normalizedTrustRiskId,
+
+          action:
+            "acknowledge",
+
+          previousState:
+            "open",
+
+          newState:
+            "acknowledged",
+
+          reviewedBy:
+            normalizedAcknowledgedBy,
+
+          reviewNote:
+            normalizedAcknowledgementNote,
+
+          reviewedAt:
+            normalizedAcknowledgedAt,
+
+          metadata: {
+            lifecycle_action:
+              "runtime.execution." +
+              "trust-risk.acknowledge"
+          }
+        });
+
+      return {
+        trust_risk:
+          updateResult.rows[0],
+
+        review
+      };
+    }
+  });
+}
+
+async function resolveTrustRisk({
+  db,
+  trustRiskId,
+  resolvedBy,
+  resolutionNote,
+  resolvedAt = new Date(),
+  reviewId = buildTrustRiskReviewId()
+}) {
+  const normalizedTrustRiskId =
+    requireNonEmptyString(
+      trustRiskId,
+      "trust_risk_id",
+      256
+    );
+
+  const normalizedResolvedBy =
+    requireNonEmptyString(
+      resolvedBy,
+      "resolved_by",
+      256
+    );
+
+  const normalizedResolutionNote =
+    requireNonEmptyString(
+      resolutionNote,
+      "resolution_note",
+      4000
+    );
+
+  const normalizedReviewId =
+    requireNonEmptyString(
+      reviewId,
+      "review_id",
+      256
+    );
+
+  const normalizedResolvedAt =
+    normalizeReviewTimestamp(
+      resolvedAt
+    );
+
+  return withReviewTransaction({
+    db,
+
+    operation: async client => {
+      const existing =
+        await getTrustRisk({
+          db:
+            client,
+
+          trustRiskId:
+            normalizedTrustRiskId,
+
+          forUpdate:
+            true
+        });
+
+      if (
+        !existing ||
+        existing.risk_state !==
+          "acknowledged"
+      ) {
+        throwResolveStateError({
+          existing,
+
+          trustRiskId:
+            normalizedTrustRiskId
+        });
+      }
+
+      const updateResult =
+        await client.query(`
+          UPDATE runtime_trust_risks
+          SET
+            risk_state =
+              'resolved',
+
+            resolved_at =
+              $4::timestamptz,
+
+            resolution_note =
+              $3::text,
+
+            metadata =
+              metadata ||
+              jsonb_build_object(
+                'resolved_by',
+                $2::text,
+
+                'resolved_at',
+                $4::timestamptz,
+
+                'resolution_note',
+                $3::text
+              ),
+
+            updated_at =
+              $4::timestamptz
+
+          WHERE trust_risk_id = $1
+            AND risk_state =
+              'acknowledged'
+
+          RETURNING *
+        `, [
+          normalizedTrustRiskId,
+          normalizedResolvedBy,
+          normalizedResolutionNote,
+          normalizedResolvedAt
+        ]);
+
+      if (updateResult.rows.length !== 1) {
+        throw new Error(
+          "trust_risk_resolve_update_failed"
+        );
+      }
+
+      const review =
+        await insertTrustRiskReview({
+          db:
+            client,
+
+          reviewId:
+            normalizedReviewId,
+
+          trustRiskId:
+            normalizedTrustRiskId,
+
+          action:
+            "resolve",
+
+          previousState:
+            "acknowledged",
+
+          newState:
+            "resolved",
+
+          reviewedBy:
+            normalizedResolvedBy,
+
+          reviewNote:
+            normalizedResolutionNote,
+
+          reviewedAt:
+            normalizedResolvedAt,
+
+          metadata: {
+            lifecycle_action:
+              "runtime.execution." +
+              "trust-risk.resolve"
+          }
+        });
+
+      return {
+        trust_risk:
+          updateResult.rows[0],
+
+        review
+      };
     }
   });
 }
@@ -435,5 +706,6 @@ module.exports = {
   TRUST_RISK_SELECT,
   TrustRiskReviewError,
   acknowledgeTrustRisk,
+  buildTrustRiskReviewId,
   resolveTrustRisk
 };

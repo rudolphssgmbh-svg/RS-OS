@@ -147,7 +147,7 @@ async function handleTrustRiskReviewRoute({
       const acknowledgedAt =
         new Date();
 
-      const trustRisk =
+      const result =
         await acknowledgeTrustRisk({
           db,
 
@@ -175,14 +175,17 @@ async function handleTrustRiskReviewRoute({
           acknowledgedAt.toISOString(),
 
         trust_risk:
-          trustRisk
+          result.trust_risk,
+
+        review:
+          result.review
       });
     }
 
     const resolvedAt =
       new Date();
 
-    const trustRisk =
+    const result =
       await resolveTrustRisk({
         db,
 
@@ -210,7 +213,10 @@ async function handleTrustRiskReviewRoute({
         resolvedAt.toISOString(),
 
       trust_risk:
-        trustRisk
+        result.trust_risk,
+
+      review:
+        result.review
     });
   } catch (error) {
     if (
