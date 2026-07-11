@@ -1,97 +1,171 @@
-# RS OS Recovery Runbook v1
+# RS OS Recovery Runbook v2
 
-## Verified production environment
+Status: Operational baseline verified
+Last verified: 2026-07-11
 
-### Containers
+## 1. Authoritative production contract
 
-- rsos-runtime-api
-- rsos-postgres
-- rsos-redis
+The authoritative production orchestration is:
 
-### Network
+- project: `rsos`
+- project directory: `/opt/rsos`
+- Compose file: `/opt/rsos/docker-compose.yml`
+- Compose implementation: Docker Compose v2
 
-- rsos_default
+Active services:
 
-### Volumes
+- `postgres`
+- `redis`
+- `registry-server`
+- `runtime-api`
+- `runtime-api-recovery`
 
-- rsos_postgres
-- rsos_redis
+Explicit images:
 
-## Important finding
+- `postgres:16`
+- `redis:7`
+- `rsos-registry-server:latest`
+- `rsos-runtime-api:latest`
+- `rsos-runtime-api-recovery:latest`
 
-The currently running production containers are not managed by the Compose project located in `/opt/rsos/docker`.
+## 2. Storage contract
 
-`docker-compose ps` from `/opt/rsos/docker` returns no managed containers, while `docker ps` shows active production containers.
+PostgreSQL production data:
 
-Therefore `/opt/rsos/docker/docker-compose.yml` is currently treated as the recovery target definition, not as the active orchestration owner.
+`/opt/rsos/storage/postgres:/var/lib/postgresql/data`
 
-## Existing server warning
+Registry data:
 
-Do not run the recovery deployment commands on the current production server while `rsos-runtime-api`, `rsos-postgres`, and `rsos-redis` already exist as unmanaged containers.
+`/opt/rsos/registry-server/data:/data`
 
-Doing so causes container name conflicts.
+Redis currently has no persistent production volume.
 
-## Recovery build procedure
+The active project network is `rsos_default`.
 
-Run on a clean or recovery server:
+## 3. Safe verification
 
-    cd /opt/rsos
-    sudo docker build -t rsos-runtime-api:latest ./runtime-api
+Use the authoritative project, project directory and Compose file for all
+checks.
 
-## Recovery deployment procedure for a clean server only
+Runtime health endpoint:
 
-    sudo docker network create rsos_default || true
-    sudo docker volume create rsos_postgres || true
-    sudo docker volume create rsos_redis || true
+`http://127.0.0.1:8080/health`
 
-    cd /opt/rsos/docker
-    sudo docker-compose up -d
+Registry health is verified through the container health state. An
+unauthenticated Registry HTTP request can return status 401.
 
-## Current risks
+Redis must respond with `PONG`.
 
-- PostgreSQL backup strategy not yet validated
-- PostgreSQL restore procedure not yet tested
-- Redis recovery strategy not yet validated
-- Secret management documentation missing
-- Running production containers are not yet managed by Compose
+Critical database baseline verified on 2026-07-11:
 
-## Recommended next milestones
+`0|0|133`
 
-1. PostgreSQL backup procedure
-2. PostgreSQL restore test
-3. Compose ownership migration
-4. Disaster recovery validation
-5. RS OS deployment pipeline
-## Verified Backup and Restore Validation
+The public schema contained 86 tables.
 
-### Backup Procedure
+## 4. Runtime restart
 
-```bash
-cd /opt/rsos
+A Runtime API restart must use Docker Compose v2 with:
 
-sudo mkdir -p backups/postgres
+- project `rsos`
+- project directory `/opt/rsos`
+- Compose file `/opt/rsos/docker-compose.yml`
+- service `runtime-api`
 
-BACKUP_FILE="backups/postgres/rsos_runtime_$(date +%Y%m%d_%H%M%S).sql"
+A restart does not rebuild the Runtime API image.
 
-sudo docker exec rsos-postgres \
-  pg_dump -U rsos -d rsos_runtime > "$BACKUP_FILE"
-```
+## 5. Verified PostgreSQL backup
 
-### Restore Validation Procedure
+Verified backup:
 
-```bash
-sudo docker exec rsos-postgres createdb -U rsos rsos_restore_test
+`/opt/rsos/backups/postgres/rsos_runtime_20260711_200712.sql`
 
-cat "$BACKUP_FILE" | \
-sudo docker exec -i rsos-postgres \
-psql -U rsos -d rsos_restore_test
-```
+SHA-256:
 
-### Validation Results
+`2eae5eff2c807f562fd5660aed5c5c740eb87f77f3ff321e806fe855f88a5ff3`
 
-Verified successfully on 2026-06-02:
+Recorded size:
 
-* runtime_events = 167
-* runtime_objects = 5
+`953900 bytes`
 
-Backup and restore process confirmed operational.
+Validation completed successfully:
+
+- restored critical counts: `0|0|133`
+- restored public table count: 86
+- production database remained unchanged
+- temporary restore database was removed
+
+The empty interrupted dump was quarantined as invalid evidence:
+
+`/opt/rsos/backups/postgres/invalid/rsos_runtime_20260711_195741.sql.invalid-empty`
+
+## 6. Deprecated secondary definition
+
+`/opt/rsos/docker/docker-compose.yml` is not the production definition.
+
+It is deprecated because it:
+
+- defines only three services
+- expects external named volumes
+- omits Registry Server
+- omits Recovery Runtime
+- does not represent the production PostgreSQL bind mount
+- does not represent the complete image contract
+
+It must not be used against the production server.
+
+## 7. Production safety controls
+
+The following action classes require a separate reviewed procedure:
+
+- removing the full Compose project
+- removing project volumes
+- pruning Docker storage
+- deleting production storage paths
+- replacing the PostgreSQL data directory
+- recreating every service
+- starting the deprecated secondary definition
+- restoring directly into the production database
+- deleting rollback images
+- automatic package cleanup
+
+This section intentionally contains no directly executable destructive
+commands.
+
+## 8. Recovery order
+
+Controlled recovery order:
+
+1. PostgreSQL
+2. PostgreSQL readiness and data verification
+3. Redis
+4. Registry Server
+5. Recovery Runtime
+6. Production Runtime API
+7. service-set verification
+8. database baseline verification
+9. deployed image and source verification
+
+## 9. Recovery completion criteria
+
+Recovery is complete only when:
+
+- the authoritative Compose definition validates
+- all five services are running
+- PostgreSQL uses `/opt/rsos/storage/postgres`
+- Runtime API reports healthy database connectivity
+- Registry container health is `healthy`
+- Redis responds with `PONG`
+- database counts are plausible
+- image and source identity are verified
+- no unintended container was replaced
+- dashboard worktree changes remain untouched
+- a valid backup and restore test are recorded
+
+## 10. Open risks
+
+- no complete clean-server recovery rehearsal
+- no persistent Redis storage
+- no verified off-server backup retention
+- no separate Registry restore rehearsal
+- secrets remain represented in Compose configuration
+- deprecated secondary Compose file remains in the repository
