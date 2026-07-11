@@ -112,14 +112,29 @@ async function enforceGovernanceDecisionGate({
     };
   }
 
-  if (latestGovernanceDecision.governance_status === "blocked") {
+  const sourceGovernanceStatus =
+    latestGovernanceDecision.governance_status;
+
+  const governanceStatus =
+    sourceGovernanceStatus === "pending_review"
+      ? "review_required"
+      : sourceGovernanceStatus;
+
+  const canonicalGovernanceStatuses = new Set([
+    "allowed",
+    "review_required",
+    "blocked"
+  ]);
+
+  if (!canonicalGovernanceStatuses.has(governanceStatus)) {
     return {
       allowed: false,
       status: "blocked",
-      reason: "execution_blocked_by_governance",
-      error: "execution_blocked_by_governance",
+      reason: "invalid_governance_decision_status",
+      error: "invalid_governance_decision_status",
       gate_status: "blocked",
-      governance_status: latestGovernanceDecision.governance_status,
+      governance_status: "blocked",
+      source_governance_status: sourceGovernanceStatus,
       decision_id: latestGovernanceDecision.decision_id,
       object_id,
       tenant_id,
@@ -128,7 +143,24 @@ async function enforceGovernanceDecisionGate({
     };
   }
 
-  if (latestGovernanceDecision.governance_status === "review_required") {
+  if (governanceStatus === "blocked") {
+    return {
+      allowed: false,
+      status: "blocked",
+      reason: "execution_blocked_by_governance",
+      error: "execution_blocked_by_governance",
+      gate_status: "blocked",
+      governance_status: governanceStatus,
+      source_governance_status: sourceGovernanceStatus,
+      decision_id: latestGovernanceDecision.decision_id,
+      object_id,
+      tenant_id,
+      latest_governance_decision: latestGovernanceDecision,
+      approval: null
+    };
+  }
+
+  if (governanceStatus === "review_required") {
     const approvalResult = await db.query(`
       SELECT *
       FROM runtime_governance_approvals
@@ -150,7 +182,8 @@ async function enforceGovernanceDecisionGate({
         reason: "execution_requires_governance_review",
         error: "execution_requires_governance_review",
         gate_status: "review_required",
-        governance_status: latestGovernanceDecision.governance_status,
+        governance_status: governanceStatus,
+        source_governance_status: sourceGovernanceStatus,
         decision_id: latestGovernanceDecision.decision_id,
         object_id,
         tenant_id,
@@ -166,7 +199,8 @@ async function enforceGovernanceDecisionGate({
         reason: "execution_rejected_by_governance_approval",
         error: "execution_rejected_by_governance_approval",
         gate_status: "blocked",
-        governance_status: latestGovernanceDecision.governance_status,
+        governance_status: governanceStatus,
+        source_governance_status: sourceGovernanceStatus,
         approval_status: approval.approval_status,
         decision_id: latestGovernanceDecision.decision_id,
         approval_id: approval.approval_id,
@@ -183,7 +217,8 @@ async function enforceGovernanceDecisionGate({
         status: "allowed",
         reason: "execution_allowed_by_governance_approval",
         gate_status: "allowed",
-        governance_status: latestGovernanceDecision.governance_status,
+        governance_status: governanceStatus,
+        source_governance_status: sourceGovernanceStatus,
         approval_status: approval.approval_status,
         decision_id: latestGovernanceDecision.decision_id,
         approval_id: approval.approval_id,
@@ -193,14 +228,49 @@ async function enforceGovernanceDecisionGate({
         approval
       };
     }
+
+    return {
+      allowed: false,
+      status: "blocked",
+      reason: "invalid_governance_approval_status",
+      error: "invalid_governance_approval_status",
+      gate_status: "blocked",
+      governance_status: governanceStatus,
+      source_governance_status: sourceGovernanceStatus,
+      approval_status: approval.approval_status,
+      decision_id: latestGovernanceDecision.decision_id,
+      approval_id: approval.approval_id,
+      object_id,
+      tenant_id,
+      latest_governance_decision: latestGovernanceDecision,
+      approval
+    };
+  }
+
+  if (governanceStatus === "allowed") {
+    return {
+      allowed: true,
+      status: "allowed",
+      reason: "execution_allowed_by_governance_gate",
+      gate_status: "allowed",
+      governance_status: governanceStatus,
+      source_governance_status: sourceGovernanceStatus,
+      decision_id: latestGovernanceDecision.decision_id,
+      object_id,
+      tenant_id,
+      latest_governance_decision: latestGovernanceDecision,
+      approval: null
+    };
   }
 
   return {
-    allowed: true,
-    status: "allowed",
-    reason: "execution_allowed_by_governance_gate",
-    gate_status: "allowed",
-    governance_status: latestGovernanceDecision.governance_status,
+    allowed: false,
+    status: "blocked",
+    reason: "invalid_governance_decision_status",
+    error: "invalid_governance_decision_status",
+    gate_status: "blocked",
+    governance_status: "blocked",
+    source_governance_status: sourceGovernanceStatus,
     decision_id: latestGovernanceDecision.decision_id,
     object_id,
     tenant_id,
