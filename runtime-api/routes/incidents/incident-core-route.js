@@ -163,35 +163,77 @@ if (
   if (body.status === "closed") {
 
     const governanceCheck = await db.query(`
-      SELECT
-        EXISTS (
-          SELECT 1
+        WITH latest_decision AS (
+          SELECT
+            decision_id,
+            revision_number
           FROM runtime_governance_decisions
           WHERE tenant_id = $1
             AND object_id = $2
-        ) AS has_decision,
-
-        EXISTS (
-          SELECT 1
+          ORDER BY
+            revision_number DESC,
+            decision_id DESC
+          LIMIT 1
+        ),
+        current_approval AS (
+          SELECT
+            approval_id,
+            approval_status,
+            decision_id
           FROM runtime_governance_approvals
           WHERE tenant_id = $1
             AND object_id = $2
-        ) AS has_approval,
+            AND decision_id = (
+              SELECT decision_id
+              FROM latest_decision
+            )
+          LIMIT 1
+        )
+        SELECT
+          EXISTS (
+            SELECT 1
+            FROM latest_decision
+          ) AS has_decision,
 
-        EXISTS (
-          SELECT 1
-          FROM runtime_risks
-          WHERE tenant_id = $1
-            AND object_id = $2
-        ) AS has_residual_risk,
+          EXISTS (
+            SELECT 1
+            FROM current_approval
+          ) AS has_approval,
 
-        EXISTS (
-          SELECT 1
-          FROM runtime_incident_lessons
-          WHERE tenant_id = $1
-            AND incident_id = $2::uuid
-        ) AS has_lesson
-    `, [
+          (
+            SELECT decision_id
+            FROM latest_decision
+          ) AS decision_id,
+
+          (
+            SELECT revision_number
+            FROM latest_decision
+          ) AS revision_number,
+
+          (
+            SELECT approval_id
+            FROM current_approval
+          ) AS approval_id,
+
+          (
+            SELECT approval_status
+            FROM current_approval
+          ) AS approval_status,
+
+          EXISTS (
+            SELECT 1
+            FROM runtime_risks
+            WHERE tenant_id = $1
+              AND object_id = $2
+          ) AS has_residual_risk,
+
+          EXISTS (
+            SELECT 1
+            FROM runtime_incident_lessons
+            WHERE tenant_id = $1
+              AND incident_id = $2::uuid
+          ) AS has_lesson
+      `, [
       auth.user.tenant_id,
       incident_id
     ]);

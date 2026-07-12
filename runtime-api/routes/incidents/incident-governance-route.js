@@ -53,21 +53,77 @@ if (
     });
   }
 
-  const decisions = await db.query(`
-    SELECT COUNT(*)::int AS count
-    FROM runtime_governance_decisions
-    WHERE tenant_id = $1
-      AND object_id = $2
-  `, [
-    auth.user.tenant_id,
-    incident_id
-  ]);
+  const governanceState = await db.query(`
+    WITH latest_decision AS (
+      SELECT
+        decision_id,
+        revision_number
+      FROM runtime_governance_decisions
+      WHERE tenant_id = $1
+        AND object_id = $2
+      ORDER BY
+        revision_number DESC,
+        decision_id DESC
+      LIMIT 1
+    ),
+    current_approval AS (
+      SELECT
+        approval_id,
+        approval_status,
+        decision_id
+      FROM runtime_governance_approvals
+      WHERE tenant_id = $1
+        AND object_id = $2
+        AND decision_id = (
+          SELECT decision_id
+          FROM latest_decision
+        )
+      LIMIT 1
+    )
+    SELECT
+      (
+        SELECT COUNT(*)::int
+        FROM runtime_governance_decisions
+        WHERE tenant_id = $1
+          AND object_id = $2
+      ) AS decision_count,
 
-  const approvals = await db.query(`
-    SELECT COUNT(*)::int AS count
-    FROM runtime_governance_approvals
-    WHERE tenant_id = $1
-      AND object_id = $2
+      (
+        SELECT COUNT(*)::int
+        FROM runtime_governance_approvals
+        WHERE tenant_id = $1
+          AND object_id = $2
+      ) AS approval_count,
+
+      EXISTS (
+        SELECT 1
+        FROM latest_decision
+      ) AS has_decision,
+
+      EXISTS (
+        SELECT 1
+        FROM current_approval
+      ) AS has_approval,
+
+      (
+        SELECT decision_id
+        FROM latest_decision
+      ) AS decision_id,
+
+      (
+        SELECT revision_number
+        FROM latest_decision
+      ) AS revision_number,
+
+      (
+        SELECT approval_id
+        FROM current_approval
+      ) AS approval_id,
+
+      (
+        SELECT approval_status
+        FROM current_approval
+      ) AS approval_status
   `, [
     auth.user.tenant_id,
     incident_id
@@ -83,9 +139,12 @@ if (
     incident_id
   ]);
 
+  const governance =
+    governanceState.rows[0];
+
   const checks = {
-    has_decision: decisions.rows[0].count > 0,
-    has_approval: approvals.rows[0].count > 0,
+    has_decision: governance.has_decision,
+    has_approval: governance.has_approval,
     has_residual_risk: risks.rows[0].count > 0,
     incident_closed: incident.rows[0].status === "closed"
   };
@@ -102,9 +161,19 @@ if (
     governance_ready: governanceReady,
     checks,
     counts: {
-      decisions: decisions.rows[0].count,
-      approvals: approvals.rows[0].count,
+      decisions: governance.decision_count,
+      approvals: governance.approval_count,
       residual_risks: risks.rows[0].count
+    },
+    current_governance: {
+      decision_id:
+        governance.decision_id || null,
+      revision_number:
+        governance.revision_number || null,
+      approval_id:
+        governance.approval_id || null,
+      approval_status:
+        governance.approval_status || null
     }
   });
 }
@@ -538,7 +607,7 @@ if (
     WHERE tenant_id = $1
       AND object_id = $2
     ORDER BY
-      created_at DESC,
+      revision_number DESC,
       decision_id DESC
   `, [
     auth.user.tenant_id,
@@ -557,6 +626,18 @@ if (
     auth.user.tenant_id,
     incident_id
   ]);
+
+  const latestDecision =
+    decisions.rows[0] || null;
+
+  const latestApproval =
+    latestDecision
+      ? approvals.rows.find(
+          approval =>
+            approval.decision_id ===
+            latestDecision.decision_id
+        ) || null
+      : null;
 
   const risks = await db.query(`
     SELECT *
@@ -580,10 +661,10 @@ if (
       approvals.rows.length,
 
     latest_decision:
-      decisions.rows[0] || null,
+      latestDecision,
 
     latest_approval:
-      approvals.rows[0] || null,
+      latestApproval,
 
     residual_risk:
       risks.rows[0] || null
