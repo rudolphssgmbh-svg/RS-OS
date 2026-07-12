@@ -388,8 +388,11 @@ if (
     });
   }
 
+  const decision_type =
+    body.decision_type || "incident_governance_review";
+
   const reason_codes = {
-    decision_type: body.decision_type || "incident_governance_review",
+    decision_type,
     reason: body.reason || "Incident governance review created",
     created_by: auth.user.operator_id
   };
@@ -401,6 +404,7 @@ if (
       tenant_id,
       governance_status,
       reason_codes,
+      decision_type,
       risk_count,
       max_risk_score,
       acute_risk_count,
@@ -410,14 +414,15 @@ if (
       audit_event_count,
       created_at
     )
-    VALUES ($1,$2,$3,$4,$5,0,0,0,0,0,0,0,now())
+    VALUES ($1,$2,$3,$4,$5,$6,0,0,0,0,0,0,0,now())
     RETURNING *
   `, [
     decision_id,
     incident_id,
     auth.user.tenant_id,
     governance_status,
-    JSON.stringify(reason_codes)
+    JSON.stringify(reason_codes),
+    decision_type
   ]);
 
   await writeEvent({
