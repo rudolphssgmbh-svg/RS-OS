@@ -14,7 +14,9 @@ async function getTraceGovernance({
     FROM runtime_governance_decisions
     WHERE tenant_id = $1
       AND object_id = $2
-    ORDER BY created_at DESC
+    ORDER BY
+        revision_number DESC,
+        decision_id DESC
   `, [
     tenant_id,
     object_id
