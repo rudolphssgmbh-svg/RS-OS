@@ -1,3 +1,10 @@
+const {
+  createGovernanceDecisionRevision
+} = require(
+  "../../modules/governance/" +
+  "governance-decision-revision-service"
+);
+
 async function handleIncidentGovernanceRoute({
   req,
   res,
@@ -479,51 +486,28 @@ if (
     created_by: auth.user.operator_id
   };
 
-  const result = await db.query(`
-    INSERT INTO runtime_governance_decisions (
+  const decisionResult =
+    await createGovernanceDecisionRevision({
+      db,
+      writeEvent,
       decision_id,
-      object_id,
-      tenant_id,
+      object_id: incident_id,
+      tenant_id: auth.user.tenant_id,
       governance_status,
       reason_codes,
       decision_type,
-      risk_count,
-      max_risk_score,
-      acute_risk_count,
-      open_action_count,
-      high_open_action_count,
-      graph_edge_count,
-      audit_event_count,
-      created_at
-    )
-    VALUES ($1,$2,$3,$4,$5,$6,0,0,0,0,0,0,0,now())
-    RETURNING *
-  `, [
-    decision_id,
-    incident_id,
-    auth.user.tenant_id,
-    governance_status,
-    JSON.stringify(reason_codes),
-    decision_type
-  ]);
-
-  await writeEvent({
-    tenant_id: auth.user.tenant_id,
-    object_id: incident_id,
-    event_type: "runtime.incident.governance_review.created",
-    message: JSON.stringify({
-      incident_id,
-      decision_id,
-      governance_status,
-      reason_codes,
-      created_by: auth.user.operator_id
-    }),
-    created_by: auth.user.operator_id
-  });
+      created_by: auth.user.operator_id,
+      event_type:
+        "runtime.incident.governance_review.created",
+      event_payload: {
+        incident_id
+      }
+    });
 
   return send(res, 201, {
     incident: incident.rows[0],
-    governance_decision: result.rows[0]
+    governance_decision:
+      decisionResult.governance_decision
   });
 }
 
