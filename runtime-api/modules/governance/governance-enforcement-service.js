@@ -89,7 +89,7 @@ async function enforceGovernanceDecisionGate({
     WHERE tenant_id = $1
       AND object_id = $2
     ORDER BY
-      created_at DESC,
+      revision_number DESC,
       decision_id DESC
     LIMIT 1
   `, [
