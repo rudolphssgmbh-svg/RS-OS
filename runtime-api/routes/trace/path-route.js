@@ -108,6 +108,8 @@ async function handlePathRoute({
     const decisionsResult = await db.query(`
       SELECT
         decision_id,
+        revision_number,
+        previous_decision_id,
         object_id,
         governance_status,
         reason_codes,
@@ -122,7 +124,9 @@ async function handlePathRoute({
       FROM runtime_governance_decisions
       WHERE tenant_id = $1
         AND object_id = $2
-      ORDER BY created_at ASC
+      ORDER BY
+        revision_number ASC,
+        decision_id ASC
     `, [
       auth.user.tenant_id,
       object_id
@@ -146,7 +150,12 @@ async function handlePathRoute({
         FROM runtime_governance_approvals
         WHERE tenant_id = $1
           AND decision_id = ANY($2)
-        ORDER BY created_at ASC
+        ORDER BY
+          array_position(
+            $2::text[],
+            decision_id
+          ) ASC,
+          approval_id ASC
       `, [
         auth.user.tenant_id,
         decisionIds
@@ -161,8 +170,12 @@ async function handlePathRoute({
         : null;
 
     const latestApproval =
-      approvals.length > 0
-        ? approvals[approvals.length - 1]
+      latestDecision
+        ? approvals.find(
+            approval =>
+              approval.decision_id ===
+              latestDecision.decision_id
+          ) || null
         : null;
 
     send(res, 200, {
