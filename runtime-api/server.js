@@ -10,6 +10,7 @@ const { handleRsos060VerificationsRoutes } = require("./modules/rsos060/verifica
 const jwt = require("jsonwebtoken");
 const { send } = require("./response/send");
 const { createAuditHash } = require("./evidence/audit-hash");
+const { createRuntimeEventWriter } = require("./evidence/runtime-event-writer");
 const { verifyOperatorSignature, generateToken, verifyToken, requireRole } = require("./verification/auth");
 const { readBody } = require("./ingress/body");
 const { db } = require("./bootstrap/database");
@@ -324,69 +325,11 @@ async function executeDefensePipeline(ingress_id) {
 
 
 
-async function writeEvent({
-  event_type,
-  object_id = null,
-  message = "",
-  tenant_id = null,
-  event_payload = {}
-}) {
-
-  const previousEvent = await db.query(`
-    SELECT audit_hash
-    FROM runtime_events
-    ORDER BY created_at DESC
-    LIMIT 1
-  `);
-
-  const previous_hash =
-    previousEvent.rows.length > 0
-      ? previousEvent.rows[0].audit_hash
-      : null;
-
-  const audit_hash = createAuditHash({
-    event_type,
-    object_id,
-    message,
-    previous_hash,
-    tenant_id
+const writeEvent =
+  createRuntimeEventWriter({
+    db,
+    createAuditHash
   });
-
-  const event_id =
-    "evt-" +
-    Date.now() +
-    "-" +
-    Math.random().toString(36).substring(2, 8);
-
-  await db.query(`
-    INSERT INTO runtime_events
-    (
-      event_id,
-      event_type,
-      object_id,
-      message,
-      audit_hash,
-      previous_hash,
-      tenant_id,
-      event_payload
-    )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-  `, [
-    event_id,
-    event_type,
-    object_id,
-    message,
-    audit_hash,
-    previous_hash,
-    tenant_id,
-    JSON.stringify(event_payload)
-  ]);
-
-  return {
-    event_id,
-    audit_hash
-  };
-}
 
 // function verifyOperatorSignature(operatorFile, signatureFile) {
 // 
