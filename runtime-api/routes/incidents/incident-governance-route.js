@@ -281,6 +281,44 @@ if (
     });
   }
 
+  const loadExistingApproval = async () =>
+    db.query(`
+      SELECT *
+      FROM runtime_governance_approvals
+      WHERE tenant_id = $1
+        AND object_id = $2
+        AND decision_id = $3
+      ORDER BY
+        created_at DESC,
+        approval_id DESC
+      LIMIT 1
+    `, [
+      auth.user.tenant_id,
+      incident_id,
+      decision.decision_id
+    ]);
+
+  const sendApprovalConflict = approval =>
+    send(res, 409, {
+      error: "conflict",
+      message:
+        "governance decision already has an approval",
+      decision_id: decision.decision_id,
+      approval_id:
+        approval ? approval.approval_id : null,
+      approval_status:
+        approval ? approval.approval_status : null
+    });
+
+  const existingApproval =
+    await loadExistingApproval();
+
+  if (existingApproval.rows.length > 0) {
+    return sendApprovalConflict(
+      existingApproval.rows[0]
+    );
+  }
+
   const approval_id =
     "appr-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
 
@@ -303,30 +341,52 @@ if (
   const reason =
     body.reason || "Incident governance approval created";
 
-  const result = await db.query(`
-    INSERT INTO runtime_governance_approvals (
+  let result;
+
+  try {
+    result = await db.query(`
+      INSERT INTO runtime_governance_approvals (
+        approval_id,
+        decision_id,
+        object_id,
+        tenant_id,
+        approval_status,
+        reason,
+        requested_by,
+        decided_by,
+        created_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
+      RETURNING *
+    `, [
       approval_id,
-      decision_id,
-      object_id,
-      tenant_id,
-      approval_status,
+      decision.decision_id,
+      incident_id,
+      auth.user.tenant_id,
+      approvalStatus,
       reason,
-      requested_by,
-      decided_by,
-      created_at
-    )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
-    RETURNING *
-  `, [
-    approval_id,
-    decision.decision_id,
-    incident_id,
-    auth.user.tenant_id,
-    approvalStatus,
-    reason,
-    body.requested_by || incident.rows[0].created_by || auth.user.operator_id,
-    auth.user.operator_id
-  ]);
+      body.requested_by ||
+        incident.rows[0].created_by ||
+        auth.user.operator_id,
+      auth.user.operator_id
+    ]);
+  } catch (error) {
+    if (
+      error &&
+      error.code === "23505" &&
+      error.constraint ===
+        "runtime_governance_approvals_decision_key"
+    ) {
+      const concurrentApproval =
+        await loadExistingApproval();
+
+      return sendApprovalConflict(
+        concurrentApproval.rows[0] || null
+      );
+    }
+
+    throw error;
+  }
 
   await writeEvent({
     tenant_id: auth.user.tenant_id,
