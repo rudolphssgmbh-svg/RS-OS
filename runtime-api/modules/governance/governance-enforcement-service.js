@@ -88,7 +88,9 @@ async function enforceGovernanceDecisionGate({
     FROM runtime_governance_decisions
     WHERE tenant_id = $1
       AND object_id = $2
-    ORDER BY created_at DESC
+    ORDER BY
+      created_at DESC,
+      decision_id DESC
     LIMIT 1
   `, [
     tenant_id,
@@ -166,7 +168,9 @@ async function enforceGovernanceDecisionGate({
       FROM runtime_governance_approvals
       WHERE tenant_id = $1
         AND decision_id = $2
-      ORDER BY created_at DESC
+      ORDER BY
+        created_at DESC,
+        approval_id DESC
       LIMIT 1
     `, [
       tenant_id,
