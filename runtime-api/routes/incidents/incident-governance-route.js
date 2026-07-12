@@ -1,4 +1,12 @@
 const {
+  GovernanceApprovalServiceError,
+  createGovernanceApproval
+} = require(
+  "../../modules/governance/" +
+  "governance-approval-service"
+);
+
+const {
   createGovernanceDecisionRevision
 } = require(
   "../../modules/governance/" +
@@ -314,176 +322,166 @@ if (
     });
   }
 
-  const latestDecision = await db.query(`
-    SELECT *
-    FROM runtime_governance_decisions
-    WHERE tenant_id = $1
-      AND object_id = $2
-    ORDER BY
-      revision_number DESC,
-      decision_id DESC
-    LIMIT 1
-  `, [
-    auth.user.tenant_id,
-    incident_id
-  ]);
-
-  if (latestDecision.rows.length === 0) {
-    return send(res, 400, {
-      error: "validation_error",
-      message: "governance decision required before approval"
-    });
-  }
-
-  const decision = latestDecision.rows[0];
-
-  const reviewableGovernanceStatuses = [
-    "pending_review",
-    "review_required"
-  ];
-
-  if (
-    !reviewableGovernanceStatuses.includes(
-      decision.governance_status
-    )
-  ) {
-    return send(res, 409, {
-      error: "conflict",
-      message: "governance decision is not reviewable",
-      decision_id: decision.decision_id,
-      governance_status: decision.governance_status,
-      allowed_governance_statuses:
-        reviewableGovernanceStatuses
-    });
-  }
-
-  const loadExistingApproval = async () =>
-    db.query(`
-      SELECT *
-      FROM runtime_governance_approvals
-      WHERE tenant_id = $1
-        AND object_id = $2
-        AND decision_id = $3
-      ORDER BY
-        created_at DESC,
-        approval_id DESC
-      LIMIT 1
-    `, [
-      auth.user.tenant_id,
-      incident_id,
-      decision.decision_id
-    ]);
-
-  const sendApprovalConflict = approval =>
-    send(res, 409, {
-      error: "conflict",
-      message:
-        "governance decision already has an approval",
-      decision_id: decision.decision_id,
-      approval_id:
-        approval ? approval.approval_id : null,
-      approval_status:
-        approval ? approval.approval_status : null
-    });
-
-  const existingApproval =
-    await loadExistingApproval();
-
-  if (existingApproval.rows.length > 0) {
-    return sendApprovalConflict(
-      existingApproval.rows[0]
-    );
-  }
-
-  const approval_id =
-    "appr-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-
   const allowedApprovalStatuses = [
     "approved",
     "rejected"
   ];
 
   const approvalStatus =
-    body.approval_status || body.status || "approved";
+    body.approval_status ||
+    body.status ||
+    "approved";
 
-  if (!allowedApprovalStatuses.includes(approvalStatus)) {
+  if (
+    !allowedApprovalStatuses.includes(
+      approvalStatus
+    )
+  ) {
     return send(res, 400, {
       error: "validation_error",
-      message: "invalid governance approval status",
-      allowed_statuses: allowedApprovalStatuses
+      message:
+        "invalid governance approval status",
+      allowed_statuses:
+        allowedApprovalStatuses
     });
   }
 
-  const reason =
-    body.reason || "Incident governance approval created";
+  const approval_id =
+    "appr-" +
+    Date.now() +
+    "-" +
+    Math.random()
+      .toString(36)
+      .slice(2, 8);
 
-  let result;
+  const reason =
+    body.reason ||
+    "Incident governance approval created";
+
+  const requestedBy =
+    body.requested_by ||
+    incident.rows[0].created_by ||
+    auth.user.operator_id;
 
   try {
-    result = await db.query(`
-      INSERT INTO runtime_governance_approvals (
+    const approvalResult =
+      await createGovernanceApproval({
+        db,
+        writeEvent,
+
         approval_id,
-        decision_id,
-        object_id,
-        tenant_id,
-        approval_status,
+
+        object_id:
+          incident_id,
+
+        tenant_id:
+          auth.user.tenant_id,
+
+        approval_status:
+          approvalStatus,
+
         reason,
-        requested_by,
-        decided_by,
-        created_at
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())
-      RETURNING *
-    `, [
-      approval_id,
-      decision.decision_id,
-      incident_id,
-      auth.user.tenant_id,
-      approvalStatus,
-      reason,
-      body.requested_by ||
-        incident.rows[0].created_by ||
-        auth.user.operator_id,
-      auth.user.operator_id
-    ]);
+
+        requested_by:
+          requestedBy,
+
+        decided_by:
+          auth.user.operator_id,
+
+        event_type:
+          "runtime.incident." +
+          "governance_approval.created",
+
+        event_payload: {
+          incident_id,
+
+          created_by:
+            auth.user.operator_id
+        }
+      });
+
+    return send(res, 201, {
+      incident:
+        incident.rows[0],
+
+      governance_decision:
+        approvalResult
+          .governance_decision,
+
+      governance_approval:
+        approvalResult
+          .governance_approval
+    });
   } catch (error) {
     if (
-      error &&
-      error.code === "23505" &&
-      error.constraint ===
-        "runtime_governance_approvals_decision_key"
+      !(
+        error instanceof
+        GovernanceApprovalServiceError
+      )
     ) {
-      const concurrentApproval =
-        await loadExistingApproval();
+      throw error;
+    }
 
-      return sendApprovalConflict(
-        concurrentApproval.rows[0] || null
-      );
+    if (
+      error.code ===
+      "governance_decision_required"
+    ) {
+      return send(res, 400, {
+        error: "validation_error",
+        message:
+          "governance decision required " +
+          "before approval"
+      });
+    }
+
+    if (
+      error.code ===
+      "governance_decision_not_reviewable"
+    ) {
+      return send(res, 409, {
+        error: "conflict",
+        message:
+          "governance decision is " +
+          "not reviewable",
+
+        decision_id:
+          error.details.decision_id,
+
+        revision_number:
+          error.details.revision_number,
+
+        governance_status:
+          error.details.governance_status,
+
+        allowed_governance_statuses:
+          error.details
+            .allowed_governance_statuses
+      });
+    }
+
+    if (
+      error.code ===
+      "governance_decision_already_approved"
+    ) {
+      return send(res, 409, {
+        error: "conflict",
+        message:
+          "governance decision already " +
+          "has an approval",
+
+        decision_id:
+          error.details.decision_id,
+
+        approval_id:
+          error.details.approval_id,
+
+        approval_status:
+          error.details.approval_status
+      });
     }
 
     throw error;
   }
-
-  await writeEvent({
-    tenant_id: auth.user.tenant_id,
-    object_id: incident_id,
-    event_type: "runtime.incident.governance_approval.created",
-    message: JSON.stringify({
-      incident_id,
-      decision_id: decision.decision_id,
-      approval_id,
-      approval_status: approvalStatus,
-      reason,
-      decided_by: auth.user.operator_id
-    }),
-    created_by: auth.user.operator_id
-  });
-
-  return send(res, 201, {
-    incident: incident.rows[0],
-    governance_decision: decision,
-    governance_approval: result.rows[0]
-  });
 }
 
 
