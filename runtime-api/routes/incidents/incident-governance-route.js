@@ -257,10 +257,30 @@ if (
     });
   }
 
+  const decision = latestDecision.rows[0];
+
+  const reviewableGovernanceStatuses = [
+    "pending_review",
+    "review_required"
+  ];
+
+  if (
+    !reviewableGovernanceStatuses.includes(
+      decision.governance_status
+    )
+  ) {
+    return send(res, 409, {
+      error: "conflict",
+      message: "governance decision is not reviewable",
+      decision_id: decision.decision_id,
+      governance_status: decision.governance_status,
+      allowed_governance_statuses:
+        reviewableGovernanceStatuses
+    });
+  }
+
   const approval_id =
     "appr-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-
-  const decision = latestDecision.rows[0];
 
   const allowedApprovalStatuses = [
     "approved",
