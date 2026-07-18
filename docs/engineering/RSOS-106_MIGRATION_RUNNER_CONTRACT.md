@@ -8,6 +8,10 @@ Implementation state: PLAN-ONLY IMPLEMENTED
 
 Static verification state: PARSER UNIT TESTED
 
+Plan verification state: POSITIVE AND FAIL-CLOSED TESTED
+
+Verification scope: PLAN MODE ONLY
+
 Production activation state: NOT ACTIVE
 
 Current committed capability is limited to read-only planning. Apply mode remains unimplemented.
