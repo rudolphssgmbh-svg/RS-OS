@@ -4,11 +4,15 @@
 
 Contract state: SPECIFIED
 
-Implementation state: NOT IMPLEMENTED
+Implementation state: PLAN-ONLY IMPLEMENTED
+
+Static verification state: PARSER UNIT TESTED
 
 Production activation state: NOT ACTIVE
 
-The migration runner is not permitted to modify a database until its implementation, static tests, isolated database tests, rollback tests, and human approval have all passed.
+Current committed capability is limited to read-only planning. Apply mode remains unimplemented.
+
+The migration runner is not permitted to modify a database until isolated database tests, concurrency tests, rollback tests, full verification, and human approval have all passed.
 
 ## 2. Purpose
 
