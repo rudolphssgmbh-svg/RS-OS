@@ -1,8 +1,1 @@
-RS OS Audit Report Dashboard
-
-STATUS=GREEN
-
-AUDIT_REPORTS_TOTAL=2
-LATEST_AUDIT_REPORT=RSOS-334_AUTOMATED_RESTORE_VALIDATION
-
-GENERATED_AT=2026-07-07T05:15:02Z
+../.snapshots/current/audit/audit-report-dashboard.txt

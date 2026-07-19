@@ -55,3 +55,6 @@ registry-server/keys/
 node-agent/current-version.txt
 node-agent/state/
 docs/engineering/_quarantine/
+
+# RS OS dashboard runtime releases
+dashboard/.snapshots/

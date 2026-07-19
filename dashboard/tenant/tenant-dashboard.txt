@@ -1,17 +1,1 @@
-RS OS Tenant Dashboard
-
-STATUS=GREEN
-
-GENERATED_AT=2026-07-07T05:15:01Z
-
-TENANT_OVERVIEW:
-            tenant_id            |       tenant_name        |       tenant_type        | status | objects | events | members 
----------------------------------+--------------------------+--------------------------+--------+---------+--------+---------
- tenant-alali24                  | ALALI24                  | digital_platform         | active |       0 |      0 |       1
- tenant-berufsbildung-sicherheit | Berufsbildung Sicherheit | security_education       | active |       0 |      0 |       1
- tenant-bibu-rudolph             | BiBu Rudolph             | accounting_service       | active |       0 |      0 |       1
- tenant-ejtr                     | EJTR Lernplattform       | learning_platform        | active |       0 |      0 |       1
- tenant-psgarage                 | PS Garage Tübingen       | automotive_service       | active |       2 |     92 |       2
- tenant-rudolph-admin            | Rudolph Buchhaltung      | tenant_management_portal | active |       1 |     19 |       1
-(6 rows)
-
+../.snapshots/current/tenant/tenant-dashboard.txt
