@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNNER_VERSION="RSOS-106-plan-v2"
-CONTRACT_VERSION="RSOS-106-v1"
+RUNNER_VERSION="RSOS-106-isolated-apply-v1"
+CONTRACT_VERSION="RSOS-106-isolated-apply-v1"
 STATIC_POLICY_VERSION="RSOS-106-static-v1"
 
 RUNNER_PATH="runtime-api/scripts/migrations/rsos106_migration_runner.sh"
-CONTRACT_PATH="docs/engineering/RSOS-106_MIGRATION_RUNNER_CONTRACT.md"
+CONTRACT_PATH="docs/engineering/RSOS-106_ISOLATED_APPLY_RUNNER_CONTRACT.md"
 
-DB_CONTAINER="rsos-postgres"
+EXPECTED_DB_CONTAINER="rsos106-isolated-postgres"
+DB_CONTAINER="$EXPECTED_DB_CONTAINER"
+PRODUCTION_DB_CONTAINER="rsos-postgres"
+EXPECTED_NETWORK_MODE="none"
+ALLOWED_MIGRATION_PATH="runtime-api/migrations/106_rsos106_isolated_apply_probe.sql"
+
 DB_NAME="rsos_runtime"
 DB_USER="rsos"
 
@@ -23,8 +28,8 @@ usage() {
 RSOS-106 fail-closed migration runner
 
 Current implementation state:
-  PLAN MODE ONLY
-  APPLY MODE NOT IMPLEMENTED
+  ISOLATED PLAN AND APPLY CANDIDATE
+  PRODUCTION TARGET LOCKED OUT
 
 Required arguments:
   --migration <repository-relative-path>
@@ -34,8 +39,8 @@ Required arguments:
 
 Optional:
   --apply
-      Explicitly requests application, but is rejected by this
-      plan-only implementation.
+      Explicitly requests the isolated transactional apply path.
+      Without this flag, the runner remains read-only.
 
   --help
       Display this help.
@@ -133,6 +138,23 @@ public_table_count() {
   "
 }
 
+ledger_row_count() {
+  db_query "
+    SELECT COUNT(*)
+    FROM public.runtime_schema_migrations;
+  "
+}
+
+maximum_migration_number() {
+  db_query "
+    SELECT COALESCE(
+      MAX(migration_number),
+      0
+    )
+    FROM public.runtime_schema_migrations;
+  "
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --migration)
@@ -188,14 +210,74 @@ done
   fail "missing_required_argument:--backup-sha256"
 
 if [ "$APPLY_REQUESTED" = "YES" ]; then
-  fail "apply_mode_not_implemented"
+  RUNNER_MODE="APPLY"
+else
+  RUNNER_MODE="PLAN"
 fi
 
 echo "=== RSOS-106 MIGRATION RUNNER ==="
 echo "runner_version=$RUNNER_VERSION"
 echo "contract_version=$CONTRACT_VERSION"
 echo "static_policy_version=$STATIC_POLICY_VERSION"
-echo "RUNNER_MODE=PLAN"
+echo "RUNNER_MODE=$RUNNER_MODE"
+
+echo
+echo "=== 0. ISOLATED TARGET CHECK ==="
+
+[ "$DB_CONTAINER" = "$EXPECTED_DB_CONTAINER" ] ||
+  fail "database_target_not_expected_isolated_container"
+
+[ "$DB_CONTAINER" != "$PRODUCTION_DB_CONTAINER" ] ||
+  fail "production_database_target_forbidden"
+
+docker inspect "$DB_CONTAINER" >/dev/null 2>&1 ||
+  fail "isolated_database_container_missing"
+
+DATABASE_CONTAINER_RUNNING="$(
+  docker inspect     --format '{{.State.Running}}'     "$DB_CONTAINER"
+)"
+
+DATABASE_NETWORK_MODE="$(
+  docker inspect     --format '{{.HostConfig.NetworkMode}}'     "$DB_CONTAINER"
+)"
+
+DATABASE_PORTS="$(
+  docker inspect     --format '{{json .NetworkSettings.Ports}}'     "$DB_CONTAINER"
+)"
+
+DATABASE_PORT_BINDINGS="$(
+  docker inspect     --format '{{json .HostConfig.PortBindings}}'     "$DB_CONTAINER"
+)"
+
+[ "$DATABASE_CONTAINER_RUNNING" = "true" ] ||
+  fail "isolated_database_container_not_running"
+
+[ "$DATABASE_NETWORK_MODE" = "$EXPECTED_NETWORK_MODE" ] ||
+  fail "isolated_database_network_mode_invalid"
+
+case "$DATABASE_PORTS" in
+  "{}"|"null")
+    ;;
+  *)
+    fail "isolated_database_has_published_ports"
+    ;;
+esac
+
+case "$DATABASE_PORT_BINDINGS" in
+  "{}"|"null")
+    ;;
+  *)
+    fail "isolated_database_has_port_bindings"
+    ;;
+esac
+
+echo "database_container=$DB_CONTAINER"
+echo "database_network_mode=$DATABASE_NETWORK_MODE"
+echo "database_ports=$DATABASE_PORTS"
+echo "database_port_bindings=$DATABASE_PORT_BINDINGS"
+echo "production_container=$PRODUCTION_DB_CONTAINER"
+echo "PRODUCTION_TARGET=LOCKED_OUT"
+echo "ISOLATED_TARGET_CHECK=PASS"
 
 echo
 echo "=== 1. REPOSITORY CHECK ==="
@@ -276,6 +358,9 @@ done
 if ! [[ "$MIGRATION_PATH" =~ ^runtime-api/migrations/[0-9]{3}_[a-z0-9_]+\.sql$ ]]; then
   fail "migration_path_invalid"
 fi
+
+[ "$MIGRATION_PATH" = "$ALLOWED_MIGRATION_PATH" ] ||
+  fail "migration_not_permitted_for_isolated_candidate"
 
 MIGRATION_KEY="$(basename "$MIGRATION_PATH")"
 MIGRATION_PREFIX="${MIGRATION_KEY:0:3}"
@@ -976,71 +1061,270 @@ echo "higher_migration_count=$HIGHER_MIGRATION_COUNT"
 echo "LEDGER_PRECHECK=PASS"
 
 echo
-echo "=== 5. PLAN READ-ONLY VERIFICATION ==="
+echo "=== 5. EXECUTION BASELINE ==="
 
 PRE_SCHEMA_SHA256="$(schema_hash)"
 PRE_CORE_STATE="$(core_state)"
 PRE_LEDGER_FINGERPRINT="$(ledger_fingerprint)"
+PRE_LEDGER_ROW_COUNT="$(ledger_row_count)"
 PRE_PUBLIC_TABLES="$(public_table_count)"
+PRE_MAX_MIGRATION="$(maximum_migration_number)"
+PRE_HEAD="$(git rev-parse HEAD)"
 
-RUNTIME_HEALTH="$(
-  curl -fsS \
-    http://127.0.0.1:8080/health
-)" ||
-  fail "runtime_health_request_failed"
+DATABASE_PROBE="$(db_query "SELECT 1;")"
 
-printf '%s\n' "$RUNTIME_HEALTH" |
-  grep -Fq '"status":"ok"' ||
-  fail "runtime_health_not_ok"
+[ "$DATABASE_PROBE" = "1" ] ||
+  fail "isolated_database_probe_failed"
 
-printf '%s\n' "$RUNTIME_HEALTH" |
-  grep -Fq '"database":"connected"' ||
-  fail "runtime_database_not_connected"
+echo "pre_schema_sha256=$PRE_SCHEMA_SHA256"
+echo "pre_core_state=$PRE_CORE_STATE"
+echo "pre_ledger_fingerprint=$PRE_LEDGER_FINGERPRINT"
+echo "pre_ledger_row_count=$PRE_LEDGER_ROW_COUNT"
+echo "pre_public_table_count=$PRE_PUBLIC_TABLES"
+echo "pre_max_migration=$PRE_MAX_MIGRATION"
+echo "isolated_database_probe=$DATABASE_PROBE"
+
+if [ "$RUNNER_MODE" = "PLAN" ]; then
+  echo
+  echo "=== 6. PLAN READ-ONLY VERIFICATION ==="
+
+  POST_SCHEMA_SHA256="$(schema_hash)"
+  POST_CORE_STATE="$(core_state)"
+  POST_LEDGER_FINGERPRINT="$(ledger_fingerprint)"
+  POST_LEDGER_ROW_COUNT="$(ledger_row_count)"
+  POST_PUBLIC_TABLES="$(public_table_count)"
+  POST_MAX_MIGRATION="$(maximum_migration_number)"
+  POST_HEAD="$(git rev-parse HEAD)"
+
+  [ "$POST_SCHEMA_SHA256" = "$PRE_SCHEMA_SHA256" ] ||
+    fail "plan_mode_changed_schema"
+
+  [ "$POST_CORE_STATE" = "$PRE_CORE_STATE" ] ||
+    fail "plan_mode_changed_core_state"
+
+  [ "$POST_LEDGER_FINGERPRINT" = "$PRE_LEDGER_FINGERPRINT" ] ||
+    fail "plan_mode_changed_ledger"
+
+  [ "$POST_LEDGER_ROW_COUNT" = "$PRE_LEDGER_ROW_COUNT" ] ||
+    fail "plan_mode_changed_ledger_row_count"
+
+  [ "$POST_PUBLIC_TABLES" = "$PRE_PUBLIC_TABLES" ] ||
+    fail "plan_mode_changed_public_table_count"
+
+  [ "$POST_MAX_MIGRATION" = "$PRE_MAX_MIGRATION" ] ||
+    fail "plan_mode_changed_maximum_migration"
+
+  [ "$POST_HEAD" = "$PRE_HEAD" ] ||
+    fail "repository_head_changed_during_plan"
+
+  echo "post_schema_sha256=$POST_SCHEMA_SHA256"
+  echo "post_core_state=$POST_CORE_STATE"
+  echo "post_ledger_fingerprint=$POST_LEDGER_FINGERPRINT"
+  echo "post_ledger_row_count=$POST_LEDGER_ROW_COUNT"
+  echo "post_public_table_count=$POST_PUBLIC_TABLES"
+  echo "post_max_migration=$POST_MAX_MIGRATION"
+
+  echo
+  echo "=== 7. PLAN SUMMARY ==="
+
+  echo "planned_migration_key=$MIGRATION_KEY"
+  echo "planned_migration_number=$MIGRATION_NUMBER"
+  echo "planned_migration_name=$MIGRATION_NAME"
+  echo "planned_migration_sha256=$WORKTREE_SHA256"
+  echo "planned_source_commit=$SOURCE_COMMIT"
+  echo "planned_predecessor_key=$CURRENT_PREDECESSOR_KEY"
+  echo "planned_backup_file=$BACKUP_FILE"
+  echo "planned_backup_sha256=$ACTUAL_BACKUP_SHA256"
+  echo "database_execution_performed=NO"
+  echo "advisory_lock_acquired=NO"
+  echo "ledger_inserted=NO"
+  echo "transaction_committed=NO"
+  echo "PRODUCTION_TARGET=LOCKED_OUT"
+
+  echo "PLAN_RESULT=PASS"
+  echo "RUNNER_RESULT=PASS"
+  exit 0
+fi
+
+echo
+echo "=== 6. ISOLATED APPLY TRANSACTION ==="
+
+set +e
+
+APPLY_OUTPUT="$(
+  {
+    {
+      printf '%s\n' 'BEGIN;'
+      printf '%s\n' "SET LOCAL lock_timeout = '5s';"
+      printf '%s\n' "SET LOCAL statement_timeout = '30s';"
+      printf '%s\n' \
+        'SELECT pg_advisory_xact_lock(106, 1);'
+      printf '%s\n' \
+        "SELECT set_config('rsos.migration_sha256', :'migration_sha256', true);"
+      printf '%s\n' \
+        "SELECT set_config('rsos.source_commit', :'source_commit', true);"
+
+      cat "$MIGRATION_PATH"
+      printf '\n'
+
+      cat <<'SQL'
+INSERT INTO public.runtime_schema_migrations (
+  migration_key,
+  migration_number,
+  migration_name,
+  file_path,
+  migration_sha256,
+  source_commit,
+  execution_mode,
+  metadata
+)
+VALUES (
+  :'migration_key',
+  :'migration_number'::INTEGER,
+  :'migration_name',
+  :'migration_path',
+  :'migration_sha256',
+  :'source_commit',
+  'runner',
+  jsonb_build_object(
+    'runner_version',
+    :'runner_version',
+    'runner_sha256',
+    :'runner_sha256',
+    'contract_version',
+    :'contract_version',
+    'contract_sha256',
+    :'contract_sha256',
+    'target_container',
+    :'target_container',
+    'advisory_lock_key',
+    '106:1',
+    'apply_contract',
+    'single_transaction_migration_plus_ledger',
+    'production_target',
+    'locked_out'
+  )
+);
+SQL
+
+      printf '%s\n' 'COMMIT;'
+    } |
+      docker exec -i "$DB_CONTAINER" \
+        psql \
+          -X \
+          -qAt \
+          -v ON_ERROR_STOP=1 \
+          -v migration_key="$MIGRATION_KEY" \
+          -v migration_number="$MIGRATION_NUMBER" \
+          -v migration_name="$MIGRATION_NAME" \
+          -v migration_path="$MIGRATION_PATH" \
+          -v migration_sha256="$WORKTREE_SHA256" \
+          -v source_commit="$SOURCE_COMMIT" \
+          -v runner_version="$RUNNER_VERSION" \
+          -v runner_sha256="$RUNNER_SHA256" \
+          -v contract_version="$CONTRACT_VERSION" \
+          -v contract_sha256="$CONTRACT_SHA256" \
+          -v target_container="$DB_CONTAINER" \
+          -U "$DB_USER" \
+          -d "$DB_NAME"
+  } 2>&1
+)"
+
+APPLY_STATUS=$?
+
+set -e
+
+printf '%s\n' "$APPLY_OUTPUT"
+
+[ "$APPLY_STATUS" -eq 0 ] ||
+  fail "isolated_apply_transaction_failed"
+
+echo
+echo "=== 7. APPLY VERIFICATION ==="
 
 POST_SCHEMA_SHA256="$(schema_hash)"
 POST_CORE_STATE="$(core_state)"
 POST_LEDGER_FINGERPRINT="$(ledger_fingerprint)"
+POST_LEDGER_ROW_COUNT="$(ledger_row_count)"
 POST_PUBLIC_TABLES="$(public_table_count)"
+POST_MAX_MIGRATION="$(maximum_migration_number)"
 POST_HEAD="$(git rev-parse HEAD)"
 
+EXPECTED_LEDGER_ROW_COUNT="$((PRE_LEDGER_ROW_COUNT + 1))"
+
+APPLIED_LEDGER_ROW="$(
+  db_query "
+    SELECT concat_ws(
+      '|',
+      migration_number::TEXT,
+      migration_name,
+      file_path,
+      migration_sha256,
+      source_commit,
+      execution_mode
+    )
+    FROM public.runtime_schema_migrations
+    WHERE migration_key = '${MIGRATION_KEY}';
+  "
+)"
+
+EXPECTED_APPLIED_LEDGER_ROW="$(
+  printf '%s|%s|%s|%s|%s|runner' \
+    "$MIGRATION_NUMBER" \
+    "$MIGRATION_NAME" \
+    "$MIGRATION_PATH" \
+    "$WORKTREE_SHA256" \
+    "$SOURCE_COMMIT"
+)"
+
 [ "$POST_SCHEMA_SHA256" = "$PRE_SCHEMA_SHA256" ] ||
-  fail "plan_mode_changed_schema"
+  fail "isolated_probe_changed_schema"
 
 [ "$POST_CORE_STATE" = "$PRE_CORE_STATE" ] ||
-  fail "plan_mode_changed_core_state"
-
-[ "$POST_LEDGER_FINGERPRINT" = "$PRE_LEDGER_FINGERPRINT" ] ||
-  fail "plan_mode_changed_ledger"
+  fail "isolated_probe_changed_core_state"
 
 [ "$POST_PUBLIC_TABLES" = "$PRE_PUBLIC_TABLES" ] ||
-  fail "plan_mode_changed_public_table_count"
+  fail "isolated_probe_changed_public_table_count"
 
-[ "$POST_HEAD" = "$CURRENT_HEAD" ] ||
-  fail "repository_head_changed_during_plan"
+[ "$POST_LEDGER_ROW_COUNT" = "$EXPECTED_LEDGER_ROW_COUNT" ] ||
+  fail "ledger_row_count_increment_invalid"
 
-echo "pre_schema_sha256=$PRE_SCHEMA_SHA256"
+[ "$POST_MAX_MIGRATION" = "$MIGRATION_NUMBER" ] ||
+  fail "maximum_migration_not_applied_migration"
+
+[ "$POST_LEDGER_FINGERPRINT" != "$PRE_LEDGER_FINGERPRINT" ] ||
+  fail "ledger_fingerprint_did_not_change"
+
+[ "$APPLIED_LEDGER_ROW" = "$EXPECTED_APPLIED_LEDGER_ROW" ] ||
+  fail "applied_ledger_row_identity_mismatch"
+
+[ "$POST_HEAD" = "$PRE_HEAD" ] ||
+  fail "repository_head_changed_during_apply"
+
 echo "post_schema_sha256=$POST_SCHEMA_SHA256"
-echo "pre_core_state=$PRE_CORE_STATE"
 echo "post_core_state=$POST_CORE_STATE"
-echo "pre_ledger_fingerprint=$PRE_LEDGER_FINGERPRINT"
 echo "post_ledger_fingerprint=$POST_LEDGER_FINGERPRINT"
-echo "pre_public_table_count=$PRE_PUBLIC_TABLES"
+echo "post_ledger_row_count=$POST_LEDGER_ROW_COUNT"
 echo "post_public_table_count=$POST_PUBLIC_TABLES"
-echo "runtime_health=$RUNTIME_HEALTH"
+echo "post_max_migration=$POST_MAX_MIGRATION"
+echo "applied_ledger_row=$APPLIED_LEDGER_ROW"
 
 echo
-echo "=== 6. PLAN SUMMARY ==="
+echo "=== 8. APPLY SUMMARY ==="
 
-echo "planned_migration_key=$MIGRATION_KEY"
-echo "planned_migration_number=$MIGRATION_NUMBER"
-echo "planned_migration_name=$MIGRATION_NAME"
-echo "planned_migration_sha256=$WORKTREE_SHA256"
-echo "planned_source_commit=$SOURCE_COMMIT"
-echo "planned_predecessor_key=$CURRENT_PREDECESSOR_KEY"
-echo "planned_backup_file=$BACKUP_FILE"
-echo "planned_backup_sha256=$ACTUAL_BACKUP_SHA256"
-echo "database_execution_performed=NO"
-echo "advisory_lock_acquired=NO"
+echo "applied_migration_key=$MIGRATION_KEY"
+echo "applied_migration_number=$MIGRATION_NUMBER"
+echo "applied_migration_name=$MIGRATION_NAME"
+echo "applied_migration_sha256=$WORKTREE_SHA256"
+echo "applied_source_commit=$SOURCE_COMMIT"
+echo "applied_predecessor_key=$CURRENT_PREDECESSOR_KEY"
+echo "validated_backup_file=$BACKUP_FILE"
+echo "validated_backup_sha256=$ACTUAL_BACKUP_SHA256"
+echo "database_execution_performed=YES"
+echo "advisory_lock_acquired=YES"
+echo "ledger_inserted=YES"
+echo "transaction_committed=YES"
+echo "PRODUCTION_TARGET=LOCKED_OUT"
 
-echo "PLAN_RESULT=PASS"
+echo "APPLY_RESULT=PASS"
 echo "RUNNER_RESULT=PASS"
