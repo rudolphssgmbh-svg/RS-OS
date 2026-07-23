@@ -195,6 +195,13 @@ A partial unique index shall enforce:
 
 UNIQUE (tenant_id, screen_id) WHERE status = 'active'
 
+
+### Normative security requirements
+
+Only the token hash shall be persisted.
+Plaintext bearer tokens shall never be stored.
+Token hashes shall use SHA-256
+
 ## 8. Content table
 
 Table:
