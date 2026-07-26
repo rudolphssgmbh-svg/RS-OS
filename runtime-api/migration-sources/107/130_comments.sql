@@ -1,0 +1,16 @@
+-- RSOS-DS-001 Migration 107 source module
+-- Module: 130_comments.sql
+-- Responsibility: database comments
+-- Generated migration target:
+-- runtime-api/migrations/107_runtime_signage_foundation.sql
+--
+-- This source module is not executable as an independent migration.
+--
+-- Intentional no-op:
+-- Migration 107 defines no normative COMMENT ON statements.
+-- The schema decision record and foundation contract contain no explicit
+-- database-comment contract, and no corresponding repository convention
+-- was observed in the existing runtime migration set.
+--
+-- Non-normative database comments are intentionally omitted to prevent
+-- invented documentation from becoming part of the governed schema.

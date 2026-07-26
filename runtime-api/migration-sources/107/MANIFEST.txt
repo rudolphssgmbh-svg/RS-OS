@@ -1,0 +1,30 @@
+RSOS-DS-001 Migration 107 Module Manifest
+
+Target:
+runtime-api/migrations/107_runtime_signage_foundation.sql
+
+Build order:
+010_screens.sql
+020_screen_credentials.sql
+030_content.sql
+040_content_versions.sql
+050_playlists.sql
+060_playlist_versions.sql
+070_playlist_items.sql
+080_publications.sql
+090_player_checkins.sql
+100_constraints.sql
+110_indexes.sql
+120_immutability.sql
+130_comments.sql
+990_verify.sql
+
+Rules:
+- Source modules are not standalone migrations.
+- Source modules shall not contain BEGIN or COMMIT.
+- The generated migration shall contain exactly one BEGIN and one COMMIT.
+- Module order is normative.
+- The build shall fail if scaffold markers remain.
+- The build shall be deterministic.
+- The generated migration is the executable and ledger-hashed artifact.
+- The generated migration shall not use psql include commands.
