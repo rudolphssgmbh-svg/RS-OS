@@ -83,6 +83,7 @@ const { handleTrainingLearningRoute } = require("./routes/training/training-lear
 const { handleTrainingGapGeneratorRoute } = require("./routes/training/training-gap-generator-route");
 const { handleRecommendationGapGeneratorRoute } = require("./routes/recommendations/recommendation-gap-generator-route");
 const { handleRecommendationRoute } = require("./routes/recommendations/recommendation-route");
+const { handleSignageRoute } = require("./routes/signage/signage-route");
 const { handleTenantRuntimeRoute } = require("./routes/tenants/tenant-runtime-route");
 const { handleTenantAdminRoute } = require("./routes/tenants/tenant-admin-route");
 const { handleTenantAdminDetailRoute } = require("./routes/tenants/tenant-admin-detail-route");
@@ -1222,6 +1223,20 @@ const server = http.createServer(async (req, res) => {
     });
 
     if (handledRecommendationRoute) {
+      return;
+    }
+
+    const handledSignageRoute = await handleSignageRoute({
+      req,
+      res,
+      path,
+      db,
+      send,
+      requireRole,
+      readBody
+    });
+
+    if (handledSignageRoute) {
       return;
     }
 
