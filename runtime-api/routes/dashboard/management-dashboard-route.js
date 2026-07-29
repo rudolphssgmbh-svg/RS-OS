@@ -3,10 +3,23 @@ async function handleManagementDashboardRoute({
   res,
   path,
   db,
-  send
+  send,
+  requireRole
 }) {
   if (!(req.method === "GET" && path === "/runtime/dashboard/management")) {
     return false;
+  }
+
+  const auth = requireRole(req, [
+    "runtime_admin",
+    "governance",
+    "auditor",
+    "system_admin"
+  ]);
+
+  if (!auth.allowed) {
+    send(res, auth.code, auth.response);
+    return true;
   }
 
   try {

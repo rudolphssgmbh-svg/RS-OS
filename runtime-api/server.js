@@ -1394,7 +1394,8 @@ const server = http.createServer(async (req, res) => {
       req,
       res,
       path,
-      db
+      db,
+      requireRole
     });
 
     if (handledTenantDashboardListRoute) {
@@ -1451,7 +1452,8 @@ const server = http.createServer(async (req, res) => {
       res,
       path,
       db,
-      send
+      send,
+      requireRole
     });
 
     if (handledManagementDashboardRoute) {

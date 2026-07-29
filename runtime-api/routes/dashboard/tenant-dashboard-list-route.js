@@ -2,10 +2,26 @@ async function handleTenantDashboardListRoute({
   req,
   res,
   path,
-  db
+  db,
+  requireRole
 }) {
   if (!(req.method === "GET" && path === "/runtime/dashboard/tenants")) {
     return false;
+  }
+
+  const auth = requireRole(req, [
+    "runtime_admin",
+    "governance",
+    "auditor",
+    "system_admin"
+  ]);
+
+  if (!auth.allowed) {
+    res.writeHead(auth.code, {
+      "Content-Type": "application/json"
+    });
+    res.end(JSON.stringify(auth.response));
+    return true;
   }
 
   try {
