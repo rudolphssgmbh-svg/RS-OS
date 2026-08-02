@@ -71,6 +71,8 @@ const { handleOutcomeRoute } = require("./routes/outcomes/outcome-route");
 const { handleMeasurementRoute } = require("./routes/measurements/measurement-route");
 const { handleVerificationCycleRoute } = require("./routes/verifications/verification-cycle-route");
 const { handleFactRoute } = require("./routes/facts/fact-route");
+const { handleHumanApprovalSpeakerShadowRoute } = require("./src/adapters/human-approval-speaker-dispatch-adapter");
+const { createHumanApprovalSpeakerRuntimeService } = require("./src/services/human-approval-speaker-dependency-factory");
 const { handleUnknownRoute } = require("./routes/unknowns/unknown-route");
 const { handleLearningCompetenceRoute } = require("./routes/learning/learning-competence-route");
 const { handleEvidenceGovernanceRoute } = require("./routes/evidence/evidence-governance-route");
@@ -974,6 +976,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+
+    const handledHumanApprovalSpeakerShadowRoute =
+      await handleHumanApprovalSpeakerShadowRoute({
+        req,
+        res,
+        path,
+        verifyToken,
+        readBody,
+        send,
+        createService: () =>
+          createHumanApprovalSpeakerRuntimeService()
+      });
+
+    if (handledHumanApprovalSpeakerShadowRoute !== false) {
+      return handledHumanApprovalSpeakerShadowRoute;
+    }
 
     const handledFactRoute = await handleFactRoute({
       req,
