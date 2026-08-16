@@ -25,3 +25,5 @@
 !trace/**
 !verification/
 !verification/**
+!src/
+!src/**

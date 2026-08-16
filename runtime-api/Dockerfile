@@ -16,6 +16,7 @@ COPY response ./response
 COPY routes ./routes
 COPY trace ./trace
 COPY verification ./verification
+COPY src ./src
 
 EXPOSE 8080
 
