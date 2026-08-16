@@ -1,5 +1,7 @@
 # RSOS Pförtner Contract
 
+Document-ID: RSOS-PF-001A
+
 ## 1. Purpose
 
 The Pförtner is the controlled communication ingress role of RSOS.
