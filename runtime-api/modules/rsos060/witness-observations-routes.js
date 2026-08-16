@@ -1,3 +1,4 @@
+const { createRuntimeObservationWriteService } = require("../../src/services/runtime-observation-write-service");
 /**
  * RSOS-060 Witness / Observations Routes
  * Extracted from server.js.
@@ -165,7 +166,10 @@ async function handleRsos060WitnessObservationsRoutes(ctx) {
       const observation_text = body.observation_text;
       const observation_time = body.observation_time || null;
       const confidence = body.confidence || null;
-      const created_by = authUser.operator_id || authUser.role || "runtime_user";
+      const created_by =
+        authUser.operator_id ||
+        authUser.role ||
+        "runtime_user";
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -181,13 +185,14 @@ async function handleRsos060WitnessObservationsRoutes(ctx) {
         });
       }
 
-      const observation_id =
-        "00000000-0000-4002-8000-" +
-        crypto.randomBytes(6).toString("hex");
+      const observationService =
+        createRuntimeObservationWriteService({
+          db,
+          writeEvent
+        });
 
-      await db.query(`
-        INSERT INTO runtime_observations (
-          observation_id,
+      const observation =
+        await observationService.create({
           tenant_id,
           witness_id,
           evidence_id,
@@ -195,42 +200,10 @@ async function handleRsos060WitnessObservationsRoutes(ctx) {
           observation_time,
           confidence,
           created_by
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      `, [
-        observation_id,
-        tenant_id,
-        witness_id,
-        evidence_id,
-        observation_text,
-        observation_time,
-        confidence,
-        created_by
-      ]);
-
-      await writeEvent({
-        tenant_id,
-        object_id: observation_id,
-        event_type: "runtime.observation.created",
-        message: JSON.stringify({
-          observation_id,
-          witness_id,
-          evidence_id,
-          confidence
-        })
-      });
+        });
 
       return send(res, 201, {
-        observation: {
-          observation_id,
-          tenant_id,
-          witness_id,
-          evidence_id,
-          observation_text,
-          observation_time,
-          confidence,
-          created_by
-        }
+        observation
       });
     }
 
