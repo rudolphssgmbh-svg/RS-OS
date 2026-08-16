@@ -111,7 +111,10 @@ async function handleRsos060AssumptionsHypothesesRoutes(ctx) {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && authUser.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {
@@ -240,7 +243,10 @@ async function handleRsos060AssumptionsHypothesesRoutes(ctx) {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && authUser.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : authUser.tenant_id;
 
       if (!tenant_id) {
         return send(res, 400, {

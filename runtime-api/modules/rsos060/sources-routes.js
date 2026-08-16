@@ -129,7 +129,10 @@ async function handleRsos060SourcesRoutes(ctx) {
       }
 
       const urlObj = new URL(req.url, "http://localhost");
-      const tenant_id = urlObj.searchParams.get("tenant_id") || authUser.tenant_id;
+      const tenant_id =
+        urlObj.searchParams.get("tenant_id") && authUser.scope === "global"
+          ? urlObj.searchParams.get("tenant_id")
+          : authUser.tenant_id;
       const status = urlObj.searchParams.get("status");
 
       if (!tenant_id) {
