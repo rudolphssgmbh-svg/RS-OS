@@ -183,7 +183,7 @@ into a successful validation result.
 The Validation Report specification does not define an independent
 Validation Report lifecycle status vocabulary.
 
-Lifecycle states are governed by LIB-009.
+Lifecycle states are governed by the contract governing the affected object.
 
 Engineering evidence verification states remain governed by ENG-005
 and shall not be redefined by this specification.

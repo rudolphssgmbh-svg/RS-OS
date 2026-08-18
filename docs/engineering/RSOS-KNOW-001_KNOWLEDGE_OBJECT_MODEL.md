@@ -169,7 +169,7 @@ Audit references shall preserve:
 
 ## 12. Lifecycle Coupling
 
-All Knowledge Objects are coupled to LIB-009 lifecycle states.
+All Knowledge Objects are coupled to LIB-009 lifecycle tracking.
 
 No active object shall exist outside lifecycle state tracking.
 
