@@ -10,6 +10,9 @@ services:
       - ${RSOS_PROOF_API_ENV_FILE:?RSOS_PROOF_API_ENV_FILE must reference a dedicated non-production API test env file}
     environment:
       DB_HOST: postgres
+    depends_on:
+      proof-postgres:
+        condition: service_healthy
     networks:
       proof_internal: {}
 
@@ -22,6 +25,12 @@ services:
     pids_limit: 64
     env_file:
       - ${RSOS_PROOF_POSTGRES_ENV_FILE:?RSOS_PROOF_POSTGRES_ENV_FILE must reference a dedicated non-production Postgres test env file}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
     networks:
       proof_internal:
         aliases:
