@@ -690,11 +690,11 @@ DESTRUCTIVE actions require explicit human authorization.
 
 | Meta Rule | Current Status | Decision | Primary Existing Capability | Main Gap |
 |---|---|---|---|---|
-| OC-META-001 | PARTIAL | HARDEN | Hausmeister / read-only / timeout patterns | canonical resource budget and observer isolation |
-| OC-META-002 | PARTIAL | EXTEND | Recovery / rollback / governance / kill-switch patterns | pre-authorized preservation playbooks |
-| OC-META-003 | PARTIAL | EXTEND | findings / idempotency / first_seen / last_seen | dedup policy, cooldown and hysteresis |
-| OC-META-004 | PARTIAL | HARDEN | SHA / preconditions / before-after gates | canonical Pre-Action Evidence Fingerprint |
-| OC-META-005 | PRESENT | REUSE | UNKNOWN / fail-closed / Hausmeister | no material architectural gap identified |
+| OC-META-001 | PARTIAL | HARDEN | Hausmeister / read-only / timeout / observer-integrity patterns | canonical bounded observer policy and verified resource budgets |
+| OC-META-002 | PARTIAL | EXTEND | Recovery / rollback / governance / preservation mandate / playbook specification / first candidate | verified and authorized executable preservation playbook |
+| OC-META-003 | PARTIAL | EXTEND | findings / idempotency / first_seen / last_seen / observer hysteresis / review lifecycle semantics | canonical finding dedup, cooldown and state policy |
+| OC-META-004 | PARTIAL | HARDEN | SHA / preconditions / before-after gates | canonical Pre-Action Evidence Fingerprint enforcement |
+| OC-META-005 | PRESENT | REUSE | UNKNOWN / fail-closed / Hausmeister / observer-integrity semantics | no material architectural gap identified |
 | OC-META-006 | ABSENT | NEW | append-only evidence / reconciliation concepts | independent emergency evidence path |
 
 ---
@@ -734,6 +734,33 @@ The following remain intentionally open:
 12. Which operational actions may ever qualify as pre-authorized preservation.
 
 Unknowns SHALL remain UNKNOWN until separately verified.
+
+### Reconciliation Note
+
+Subsequent Operational Care contracts have reduced several gaps originally
+identified by this mapping.
+
+Verified follow-up architecture now includes:
+
+- RSOS-OC-META-002A Pre-authorized Preservation Mandate Contract;
+- RSOS-OC-META-002B Preservation Playbook Specification;
+- RSOS-OC-META-002C First Preservation Playbook Candidate;
+- RSOS-OC-META-003B Minimal Maintenance Governance Contract;
+- RSOS-OC-META-003C Minimal Implementation Boundary Contract;
+- RSOS-OC-META-003D Worktree Instance & Review Boundary Contract;
+- RSOS Assessment Observer Integrity Boundary;
+- RSOS ECC-006 Evolution Candidate Promotion Contract.
+
+These contracts reduce previously identified semantic gaps but SHALL NOT be
+interpreted as proof of Runtime implementation, production authorization or
+execution authority.
+
+Therefore:
+
+    CONTRACT_DEFINED != CAPABILITY_IMPLEMENTED
+    CANDIDATE_DEFINED != EXECUTION_AUTHORIZED
+    IMPLEMENTATION_BOUNDARY_DEFINED != IMPLEMENTATION_COMPLETE
+    GAP_REDUCED != GAP_CLOSED
 
 ---
 
