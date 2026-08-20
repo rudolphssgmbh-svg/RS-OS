@@ -1,0 +1,40 @@
+services:
+  proof-api:
+    image: rsos-071k-test-api@sha256:6f0255304abb36ad396946f721ddc0047e5a421e9e8e7c779e2387207363c12a
+    restart: "no"
+    privileged: false
+    cpus: "1.0"
+    mem_limit: 512m
+    pids_limit: 64
+    env_file:
+      - ${RSOS_PROOF_API_ENV_FILE:?RSOS_PROOF_API_ENV_FILE must reference a dedicated non-production API test env file}
+    environment:
+      DB_HOST: postgres
+    networks:
+      proof_internal: {}
+
+  proof-postgres:
+    image: postgres@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
+    restart: "no"
+    privileged: false
+    cpus: "1.0"
+    mem_limit: 512m
+    pids_limit: 64
+    env_file:
+      - ${RSOS_PROOF_POSTGRES_ENV_FILE:?RSOS_PROOF_POSTGRES_ENV_FILE must reference a dedicated non-production Postgres test env file}
+    networks:
+      proof_internal:
+        aliases:
+          - postgres
+    volumes:
+      - proof_postgres_data:/var/lib/postgresql/data
+
+networks:
+  proof_internal:
+    name: rsos-071k-test-hardened
+    driver: bridge
+    internal: true
+
+volumes:
+  proof_postgres_data:
+    name: rsos-071k-test-hardened-postgres-data
